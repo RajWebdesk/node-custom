@@ -1,0 +1,3 @@
+# health-live output
+
+{status}

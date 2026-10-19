@@ -1,0 +1,220 @@
+@import "tailwindcss";
+
+/* Clean Enterprise tokens from outputs/custom-app/docs/design/dashboard-ui/design-tokens.json.
+   Pilot prototype. Values must stay in sync with the approved token file. */
+:root {
+  --color-bg: #ffffff;
+  --color-surface: #f7f8fa;
+  --color-surface-2: #eef1f5;
+  --color-text: #1b1f24;
+  --color-text-muted: #4b5563;
+  --color-border: #d0d5dd;
+  --color-border-strong: #8a94a6;
+  --color-primary: #1f4e8c;
+  --color-primary-hover: #183c6b;
+  --color-on-primary: #ffffff;
+  --color-danger: #b42318;
+  --color-success: #067647;
+  --color-warning: #8a4b00;
+  --color-info: #1d4ed8;
+  --sidebar-width: 240px;
+  --appbar-height: 56px;
+  --content-max-width: 1280px;
+  --control-height: 40px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+}
+
+body {
+  margin: 0;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  font-size: 1rem;
+  line-height: 1.5;
+}
+
+:focus-visible {
+  outline: 3px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.skip-link {
+  position: absolute;
+  left: -9999px;
+}
+.skip-link:focus {
+  left: 1rem;
+  top: 1rem;
+  background: var(--color-bg);
+  padding: 0.5rem 1rem;
+  z-index: 200;
+}
+
+.shell {
+  display: grid;
+  grid-template-columns: var(--sidebar-width) 1fr;
+  min-height: 100vh;
+}
+.sidebar {
+  background: var(--color-bg);
+  border-right: 1px solid var(--color-border);
+  padding: 1rem;
+}
+.sidebar ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.sidebar li + li {
+  margin-top: 0.25rem;
+}
+.sidebar a {
+  display: block;
+  padding: 0.5rem;
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  text-decoration: none;
+}
+.sidebar a:hover {
+  background: var(--color-surface);
+}
+.sidebar a[aria-current="page"] {
+  background: var(--color-surface-2);
+  font-weight: 600;
+}
+.appbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  min-height: var(--appbar-height);
+  padding: 0.75rem 1.5rem;
+  background: var(--color-bg);
+  border-bottom: 1px solid var(--color-border);
+}
+.timezone-label {
+  color: var(--color-text-muted);
+  font-size: 0.875rem;
+}
+.main {
+  padding: 1.5rem;
+  max-width: var(--content-max-width);
+}
+.banner {
+  background: var(--color-surface);
+  border: 1px dashed var(--color-border-strong);
+  color: var(--color-text-muted);
+  padding: 0.5rem 1rem;
+  font-size: 0.875rem;
+  border-radius: var(--radius-md);
+  margin-bottom: 1.5rem;
+}
+.card {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 1rem;
+}
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+.kpi-value {
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+.kpi-label {
+  color: var(--color-text-muted);
+  font-size: 0.875rem;
+}
+.table-wrap {
+  overflow-x: auto;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--color-bg);
+}
+th,
+td {
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--color-border);
+  height: 44px;
+}
+th {
+  font-size: 0.875rem;
+  color: var(--color-text-muted);
+  font-weight: 600;
+}
+td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.badge {
+  display: inline-block;
+  padding: 2px 0.5rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.875rem;
+  border: 1px solid var(--color-border-strong);
+}
+.state {
+  border-radius: var(--radius-md);
+  padding: 1rem;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg);
+}
+.state-error {
+  border-color: var(--color-danger);
+  color: var(--color-danger);
+}
+.state-empty {
+  color: var(--color-text-muted);
+}
+.field {
+  display: grid;
+  gap: 0.25rem;
+  margin-bottom: 1rem;
+  max-width: 360px;
+}
+.field label {
+  font-weight: 600;
+}
+.field input {
+  height: var(--control-height);
+  padding: 0 0.75rem;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  font: inherit;
+}
+.button {
+  height: var(--control-height);
+  padding: 0 1rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-primary);
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+  font: inherit;
+  cursor: pointer;
+}
+.button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.login-card {
+  max-width: 420px;
+}
+.login-message {
+  margin-top: 1rem;
+  max-width: 420px;
+}
+
+.gap-top {
+  margin-top: 1rem;
+}
+.narrow {
+  max-width: 420px;
+}

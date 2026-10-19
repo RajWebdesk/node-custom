@@ -1,0 +1,172 @@
+// Baseline schema from outputs/custom-app/g-schema-draft.md (G-Schema approved 2026-10-19 by "the user").
+// Task status and priority are PLACEHOLDER strings until the spec defines their lists.
+// Retention, deletion, and backup follow the delegated defaults in g-schema-draft.md section 6.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMINISTRATOR
+  MANAGER
+  EMPLOYEE
+}
+
+model User {
+  id                   String     @id @default(uuid())
+  name                 String
+  email                String     @unique
+  passwordHash         String // Argon2id (proposed)
+  status               String     @default("active") // active | deactivated
+  isDesignatedReviewer Boolean    @default(false) // spec Module 10: only the designated reviewer approves
+  roles                UserRole[]
+  sessions             Session[]
+  createdAt            DateTime   @default(now())
+}
+
+model UserRole {
+  userId String
+  role   Role
+  user   User   @relation(fields: [userId], references: [id])
+
+  @@id([userId, role])
+}
+
+model Session {
+  id        String    @id @default(uuid())
+  userId    String
+  csrfToken String
+  expiresAt DateTime
+  revokedAt DateTime?
+  user      User      @relation(fields: [userId], references: [id])
+}
+
+model PasswordReset {
+  id         String    @id @default(uuid())
+  userId     String
+  tokenHash  String
+  issuedById String
+  expiresAt  DateTime
+  usedAt     DateTime?
+}
+
+model Task {
+  id          String               @id @default(uuid())
+  title       String
+  description String?
+  priority    String // PLACEHOLDER: list not defined in spec
+  status      String // PLACEHOLDER: list not defined in spec (In Review exists; no Rejected status)
+  assigneeId  String
+  pmId        String
+  reviewerId  String
+  startDate   DateTime?
+  dueDate     DateTime?
+  archivedAt  DateTime?
+  createdAt   DateTime             @default(now())
+  history     TaskStatusHistory[]
+  submissions ApprovalSubmission[]
+  reminders   Reminder[]
+}
+
+model TaskStatusHistory {
+  id         String   @id @default(uuid())
+  taskId     String
+  fromStatus String?
+  toStatus   String
+  actorId    String
+  at         DateTime @default(now())
+  task       Task     @relation(fields: [taskId], references: [id])
+}
+
+model ApprovalSubmission {
+  id            String             @id @default(uuid())
+  taskId        String
+  submittedById String
+  submittedAt   DateTime           @default(now())
+  revisionNo    Int
+  task          Task               @relation(fields: [taskId], references: [id])
+  decisions     ApprovalDecision[]
+
+  @@unique([taskId, revisionNo])
+}
+
+model ApprovalDecision {
+  id           String             @id @default(uuid())
+  submissionId String             @unique // one decision per submission (duplicate guard)
+  reviewerId   String
+  decision     String // approve | revise | reject (reject keeps the task In Review)
+  decidedAt    DateTime           @default(now())
+  submission   ApprovalSubmission @relation(fields: [submissionId], references: [id])
+}
+
+model Allocation {
+  id           String             @id @default(uuid())
+  subjectId    String
+  plannedHours Decimal            @db.Decimal(6, 2)
+  updatedById  String
+  updatedAt    DateTime           @updatedAt
+  changes      AllocationChange[]
+}
+
+model AllocationChange {
+  id            String     @id @default(uuid())
+  allocationId  String
+  previousHours Decimal    @db.Decimal(6, 2)
+  newHours      Decimal    @db.Decimal(6, 2)
+  delta         Decimal    @db.Decimal(6, 2)
+  reason        String? // not mandatory (confirmed 2026-10-19)
+  actorId       String
+  at            DateTime   @default(now())
+  allocation    Allocation @relation(fields: [allocationId], references: [id])
+}
+
+model AuditEvent {
+  id         String   @id @default(uuid())
+  actorId    String?
+  action     String
+  entityType String
+  entityId   String
+  payload    Json // secrets and tokens redacted before insert
+  at         DateTime @default(now())
+
+  @@index([entityType, entityId, at])
+}
+
+model Notification {
+  id          String    @id @default(uuid())
+  recipientId String
+  kind        String
+  taskId      String?
+  payload     Json?
+  readAt      DateTime?
+  emailStatus String    @default("pending") // pending | sent | quarantined
+  createdAt   DateTime  @default(now())
+
+  @@index([recipientId, readAt])
+  @@index([emailStatus])
+}
+
+model ReminderRun {
+  slotKey    String     @id // local date plus 09:00 America/Toronto slot
+  status     String // running | done | failed
+  startedAt  DateTime   @default(now())
+  finishedAt DateTime?
+  reminders  Reminder[]
+}
+
+model Reminder {
+  id             String      @id @default(uuid())
+  taskId         String
+  reminderDate   DateTime    @db.Date
+  slotKey        String
+  notificationId String?
+  task           Task        @relation(fields: [taskId], references: [id])
+  run            ReminderRun @relation(fields: [slotKey], references: [slotKey])
+
+  @@unique([taskId, reminderDate])
+}
