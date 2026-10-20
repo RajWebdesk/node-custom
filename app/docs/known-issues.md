@@ -1,10 +1,10 @@
 # Known issues register (pilot, Task #16.4)
 
-Status as of 2026-10-20. Owner is the person who must act. "Open" means not fixed in the current build.
+Status as of 2026-10-20. Owner is the person who must act. "Open" means not fixed in the current build. "Mitigated" means the cause is addressed but not yet proven gone.
 
 | # | Issue | Impact | Owner | Status |
 |---|---|---|---|---|
-| 1 | Worker crash in the unit and integration run: one run of four ended with a native crash (exit 0xC0000409) in `security.test.ts`. Not reproduced in the next two runs. Suspected native password-hashing library under parallel load. | A full run can fail without a real defect. | Development | Open. Investigate test pool settings and the hashing library. |
+| 1 | Worker crash in the unit and integration run (exit 0xC0000409). Under the forked-process pool with default workers, 2 of 6 full runs crashed; with two workers, 1 of 5 crashed. Crashes hit different files (`security.test.ts`, `notifications`, `reset`, `profile`, `reports`). Standalone Argon2 stress (600 operations, 3 parallel processes) did not crash, so the hashing library is not confirmed as the cause. Suspected cause: parallel forked workers on Windows. | A full run can fail without a real defect. | Development | Mitigated (commit `bd3213d`): Vitest uses the threads pool. 10 full passing runs and 0 crashes since; 2 runs aborted with exit 127 before any test output (not explained). Confirm across a longer run series. |
 | 2 | Profile test ("requires the CSRF token ...") failed once under load and has not recurred. | Possible false failure. | Development | Open. Watch. |
 | 3 | Task status and priority lists are placeholders; the spec does not define them. | Statuses shown to users are interim. Task 13.3 (configuration screen) not built. | Client (decision) | Open. Blocks 13.3. |
 | 4 | Resubmission after a rejection is allowed (task stays In Review, new revision). The spec does not define this. | Behaviour may not match the client's intent. | Client (decision) | Open. Confirm in the AS script, step 5. |
@@ -23,3 +23,4 @@ Status as of 2026-10-20. Owner is the person who must act. "Open" means not fixe
 | 17 | Missing approvals: rollback and restore plans (drafts), observability SLO targets, monitoring health score method, and M6 ownership. Written confirmation of Hazel's sign-offs is not on file. | G5.5, G6, and M6 cannot pass. | pm-hazel | Open. |
 | 18 | QA lead (PG) reviews of Sprints 2, 5, 6, 8, and 9 are pending. | Sprint gates cannot be closed. | QA lead (PG) | Open. |
 | 19 | Production hosting is out of scope. | Nothing is deployed beyond the local machine. | Not applicable | By scope. |
+| 20 | Reminder due dates were compared with midnight UTC of tomorrow, so a task due later on tomorrow was not reminded. | Some tasks due tomorrow missed their reminder. | Development | Fixed (commit `e624bce`). Integration test covers a due time later on tomorrow. |
