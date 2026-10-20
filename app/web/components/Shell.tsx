@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { NotificationBell } from "./NotificationBell";
 
 // Module list from the approved module inclusion file (outputs/custom-app/docs/design/dashboard-ui/dashboard-module-inclusion.json).
 // Admin-only items are shown here for the prototype. Real visibility depends on server-side authorization, not on this list.
@@ -44,6 +45,7 @@ export function Shell({ current, children }: { current: string; children: ReactN
         <div>
           <header className="appbar">
             <span>Task &amp; Approval</span>
+            <NotificationBell />
             <span className="timezone-label">Times shown in America/Toronto</span>
           </header>
           <main id="main" className="main">

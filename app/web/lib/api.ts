@@ -55,7 +55,8 @@ export async function apiRequest(path: string, init: { method?: string; body?: u
     headers,
     body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
   });
-  if (res.status === 401) window.location.assign("/login");
+  // Never redirect from the sign-in page itself: a page that calls the API while signed out would reload forever.
+  if (res.status === 401 && window.location.pathname !== "/login") window.location.assign("/login");
   return res;
 }
 
@@ -81,6 +82,11 @@ const ERROR_TEXT: Record<string, string> = {
   "too-large": "The total would exceed 9999.99 hours.",
   "no-change": "Planned hours are already at that value.",
   "invalid-subject": "This person is not active, so their allocation cannot change.",
+  "already-decided": "This submission already has a decision.",
+  "not-in-review": "This task is not waiting for review, so no decision can be recorded.",
+  "stale-approval": "The task changed while you were acting. Reload and try again.",
+  "already-in-review": "This task is already waiting for review.",
+  "not-submittable": "This task cannot be submitted in its current status.",
   "stale-allocation": "Planned hours changed while you were editing. The latest value is shown; try again.",
   "not-found": "This task could not be found.",
 };

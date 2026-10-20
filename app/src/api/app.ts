@@ -1,7 +1,6 @@
 import express, { type Request, type Response, type NextFunction } from "express";
 import { z } from "zod";
 import { loadConfig } from "../config/env.js";
-import { DECISIONS } from "../domain/approval.js";
 import { InMemorySessionStore, type SessionStore } from "../auth/session.js";
 import { InMemoryResetStore, type ResetStore, type UserAdminStore } from "../auth/reset.js";
 import {
@@ -13,7 +12,9 @@ import {
   type UserStore,
 } from "./auth.js";
 import { issueResetHandler, redeemResetHandler, requireAdministrator, type ResetDeps } from "./reset.js";
-import { decisionHandler, InMemoryApprovalStore, type ApprovalStore } from "./decisions.js";
+import { decideHandler, reviewQueueHandler, submissionDetailHandler, submitForReviewHandler, taskReviewsHandler } from "./approvals.js";
+import { InMemoryApprovalStore, type ApprovalStore } from "../approvals/approval-store.js";
+import { InMemoryNotificationStore, type NotificationStore } from "../notifications/notification-store.js";
 import { createUserHandler, listUsersHandler, updateUserHandler } from "./users.js";
 import { InMemoryUserDirectory, type UserDirectory } from "../auth/user-directory.js";
 import { changePasswordHandler, getProfileHandler, updateProfileHandler } from "./profile.js";
@@ -21,6 +22,9 @@ import { createTaskHandler, getTaskHandler, listAssignableUsersHandler, listTask
 import { InMemoryTaskStore, type TaskStore } from "../tasks/task-store.js";
 import { InMemoryAuditStore, type AuditReader, type AuditStore } from "../audit/audit.js";
 import { activityHandler } from "./activity.js";
+import { dashboardHandler } from "./dashboard.js";
+import { listNotificationsHandler, markAllNotificationsReadHandler, markNotificationReadHandler } from "./notifications.js";
+import { consoleLogger, Metrics, requestObserver, silentLogger, withTimeout, type Logger } from "../observability/observability.js";
 import { InMemoryAllocationStore, type AllocationStore } from "../allocation/allocation-store.js";
 import { adjustAllocationHandler, allocationHistoryHandler, listAllocationsHandler } from "./allocation.js";
 
@@ -37,11 +41,12 @@ export interface AppOptions {
   taskStore?: TaskStore;
   audit?: AuditStore & AuditReader;
   allocations?: AllocationStore;
+  notifications?: NotificationStore;
+  // Database check for readiness. Resolves when the database answers; throws when it does not.
+  dbCheck?: () => Promise<void>;
+  logger?: Logger;
+  metrics?: Metrics;
 }
-
-const decisionBody = z.object({
-  decision: z.enum(DECISIONS as [string, ...string[]]),
-});
 
 const submissionParams = z.object({
   submissionId: z.string().min(1).max(64),
@@ -50,6 +55,8 @@ const submissionParams = z.object({
 export function createApp(options: AppOptions = {}): express.Express {
   // One audit store for every business action in this app instance.
   const audit = options.audit ?? new InMemoryAuditStore();
+  const metrics = options.metrics ?? new Metrics();
+  const logger = options.logger ?? (process.env.NODE_ENV === "test" ? silentLogger : consoleLogger);
   const auth: AuthDeps = {
     // With no user store supplied, nobody can log in. This is the safe default.
     users: options.users ?? { findByEmail: async () => null },
@@ -61,6 +68,8 @@ export function createApp(options: AppOptions = {}): express.Express {
   const app = express();
   app.disable("x-powered-by");
   app.use(express.json({ limit: "32kb" }));
+  // Structured request log and metrics for every request (G5.5). Logs hold no headers, cookies, or bodies.
+  app.use(requestObserver(logger, metrics));
 
   // CORS for the configured web origin only. Credentials allowed so the session cookie is sent.
   const webOrigin = process.env.WEB_ORIGIN ?? "http://localhost:3000";
@@ -84,15 +93,26 @@ export function createApp(options: AppOptions = {}): express.Express {
     res.status(200).json({ status: "ok" });
   });
 
-  // Readiness: startup configuration is valid. Database check added with the data layer.
-  app.get("/health/ready", (_req, res) => {
+  // Readiness: startup configuration is valid and the database answers within 2 seconds.
+  app.get("/health/ready", async (_req, res) => {
     const result = loadConfig(process.env);
-    if (result.ok) {
-      res.status(200).json({ status: "ready" });
-    } else {
+    if (!result.ok) {
       // Report field names only, never values.
       res.status(503).json({ status: "not-ready", missing_or_invalid: result.errors.length });
+      return;
     }
+    const databaseOk = options.dbCheck ? await withTimeout(options.dbCheck, 2000) : true;
+    if (!databaseOk) {
+      res.status(503).json({ status: "not-ready", database: "unreachable" });
+      return;
+    }
+    res.status(200).json({ status: "ready" });
+  });
+
+  // Exported metrics (profile operations.metrics.mode = exported). Counts and durations only; no personal data.
+  app.get("/metrics", (_req, res) => {
+    res.setHeader("Content-Type", "text/plain; version=0.0.4");
+    res.status(200).send(metrics.render());
   });
 
   const resetDeps: ResetDeps = {
@@ -176,17 +196,32 @@ export function createApp(options: AppOptions = {}): express.Express {
   app.post("/api/v1/tasks/:taskId/status", requireSession(auth), requireCsrf, moveTaskStatusHandler(taskDeps));
   app.post("/api/v1/auth/logout", requireSession(auth), requireCsrf, logoutHandler(auth));
 
-  // Approval decisions (spec Module 10): authenticated, CSRF-checked, designated reviewer only.
-  app.post(
-    "/api/v1/submissions/:submissionId/decisions",
-    requireSession(auth),
-    requireCsrf,
-    decisionHandler({
-      users: resetDeps.users,
-      approvals: options.approvals ?? new InMemoryApprovalStore(),
-      audit,
-    }),
-  );
+  // Approval workflow (spec Module 10). Writes need the CSRF token; the handlers apply the reviewer and
+  // assignee rules. Each change, its status move, and its audit record are stored together.
+  const notifications = options.notifications ?? new InMemoryNotificationStore();
+  const approvalDeps = {
+    approvals: options.approvals ?? new InMemoryApprovalStore(taskDeps.tasks, audit, notifications),
+    tasks: taskDeps.tasks,
+    directory: usersDeps.directory,
+  };
+  app.post("/api/v1/tasks/:taskId/submissions", requireSession(auth), requireCsrf, submitForReviewHandler(approvalDeps));
+  app.get("/api/v1/tasks/:taskId/reviews", requireSession(auth), taskReviewsHandler(approvalDeps));
+  app.get("/api/v1/reviews", requireSession(auth), reviewQueueHandler(approvalDeps));
+  app.get("/api/v1/submissions/:id", requireSession(auth), submissionDetailHandler(approvalDeps));
+  app.post("/api/v1/submissions/:id/decisions", requireSession(auth), requireCsrf, decideHandler(approvalDeps));
+
+  // Dashboard (Module 12) and in-app inbox (Module 11). Everything is scoped to the signed-in person.
+  app.get("/api/v1/dashboard", requireSession(auth), dashboardHandler({
+    tasks: taskDeps.tasks,
+    allocations: allocationDeps.allocations,
+    approvals: approvalDeps.approvals,
+    notifications,
+    audit: audit as AuditReader,
+    directory: usersDeps.directory,
+  }));
+  app.get("/api/v1/notifications", requireSession(auth), listNotificationsHandler({ notifications }));
+  app.post("/api/v1/notifications/read-all", requireSession(auth), requireCsrf, markAllNotificationsReadHandler({ notifications }));
+  app.post("/api/v1/notifications/:id/read", requireSession(auth), requireCsrf, markNotificationReadHandler({ notifications }));
 
   app.use((_req, res) => {
     res.status(404).json({ error: "not-found" });

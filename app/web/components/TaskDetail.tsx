@@ -16,6 +16,7 @@ import {
 import { StateMessage } from "./StateMessage";
 import { TaskForm } from "./TaskForm";
 import { TaskHistory } from "./TaskHistory";
+import { TaskReviews } from "./TaskReviews";
 
 // Task details (Task #7.2). Managers can edit, move between free statuses, and archive. Employees read only.
 // The API enforces the same rules for every action.
@@ -88,7 +89,8 @@ export function TaskDetail({ taskId }: { taskId: string }) {
   if (loadState === "missing") return <StateMessage kind="no-access" detail="This task does not exist or is not visible to you." />;
   if (loadState === "error" || !task) return <StateMessage kind="error" />;
 
-  const name = (id: string) => users.find((u) => u.id === id)?.name ?? (manager ? "Assigned user" : "You");
+  // "You" only for the signed-in user. Employees have no user directory, so other people show a neutral label.
+  const name = (id: string) => (me !== null && id === me.id ? "You" : users.find((u) => u.id === id)?.name ?? "Assigned user");
   const archived = task.archivedAt !== null;
   const isFree = (FREE_STATUSES as readonly string[]).includes(task.status);
   const moves = isFree ? FREE_STATUSES.filter((s) => s !== task.status) : [];
@@ -160,6 +162,13 @@ export function TaskDetail({ taskId }: { taskId: string }) {
           ) : null}
         </div>
       )}
+      <TaskReviews
+        taskId={taskId}
+        status={task.status}
+        archived={archived}
+        mayPropose={manager || (me !== null && me.id === task.assigneeId)}
+        onChanged={() => void load()}
+      />
       <TaskHistory taskId={taskId} />
     </>
   );

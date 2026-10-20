@@ -1,15 +1,16 @@
-import { PrismaClient } from "@prisma/client";
+import { Prisma, PrismaClient } from "@prisma/client";
 import type { Role } from "../domain/roles.js";
 import type { UserRecord, UserStore } from "../api/auth.js";
 import type { SessionRecord, SessionStore } from "./session.js";
 import type { ResetRecord, ResetStore, UserAdminStore } from "./reset.js";
-import type { ApprovalStore, SubmissionRecord } from "../api/decisions.js";
 import type { Decision } from "../domain/approval.js";
 import { randomBytes } from "node:crypto";
 import { DuplicateEmailError, type NewUser, type UserDirectory, type UserPatch, type UserView } from "./user-directory.js";
 import type { AuditQuery, AuditReader, AuditRecord, AuditStore } from "../audit/audit.js";
 import { buildAuditRecord } from "../audit/audit.js";
 import { StaleAllocationError, type AllocationRow, type AllocationStore, type ApplyChangeInput, type ChangeRow } from "../allocation/allocation-store.js";
+import { DuplicateDecisionError, StaleApprovalError, type ApprovalStore, type DecideInput, type QueueRow, type SubmissionRecord, type SubmitInput } from "../approvals/approval-store.js";
+import type { EmailStatus, NewNotification, NotificationRecord, NotificationStore } from "../notifications/notification-store.js";
 import { StaleStatusError, type TaskHistoryRow, type NewTask, type StatusChange, type TaskPatch, type TaskQuery, type TaskRecord, type TaskStore } from "../tasks/task-store.js";
 
 // Database-backed stores for the Prisma schema (prisma/schema.prisma).
@@ -141,31 +142,6 @@ export class PrismaResetStore implements ResetStore {
   }
 }
 
-// Approval submissions and decisions (ApprovalSubmission, ApprovalDecision). One decision per submission.
-export class PrismaApprovalStore implements ApprovalStore {
-  constructor(private readonly db: PrismaClient) {}
-
-  async findSubmission(id: string): Promise<SubmissionRecord | null> {
-    const row = await this.db.approvalSubmission.findUnique({
-      where: { id },
-      include: { task: true, decisions: true },
-    });
-    if (!row) return null;
-    return {
-      id: row.id,
-      taskId: row.taskId,
-      submittedById: row.submittedById,
-      reviewerId: row.task.reviewerId,
-      alreadyDecided: row.decisions.length > 0,
-    };
-  }
-
-  async recordDecision(submissionId: string, reviewerId: string, decision: Decision): Promise<void> {
-    await this.db.approvalDecision.create({
-      data: { submissionId, reviewerId, decision },
-    });
-  }
-}
 
 // User administration (Task #5.1). Roles are replaced as a set on update.
 type UserRow = { id: string; name: string; email: string; status: string; isDesignatedReviewer: boolean; roles: { role: string }[] };
@@ -434,5 +410,200 @@ export class PrismaAllocationStore implements AllocationStore {
         },
       };
     });
+  }
+}
+
+// Submissions and decisions (Module 10). Each write is one transaction: the submission or decision, the task
+// status change (when there is one, guarded by the status it was read with), its history row, and the audit record.
+type SubmissionRow = {
+  id: string; taskId: string; submittedById: string; submittedAt: Date; revisionNo: number;
+  task: { reviewerId: string };
+  decisions: { decision: string; reviewerId: string; decidedAt: Date }[];
+};
+
+function toSubmissionRecord(row: SubmissionRow): SubmissionRecord {
+  const d = row.decisions[0] ?? null;
+  return {
+    id: row.id,
+    taskId: row.taskId,
+    submittedById: row.submittedById,
+    submittedAt: row.submittedAt,
+    revisionNo: row.revisionNo,
+    reviewerId: row.task.reviewerId,
+    decision: d ? (d.decision as SubmissionRecord["decision"]) : null,
+    decidedById: d ? d.reviewerId : null,
+    decidedAt: d ? d.decidedAt : null,
+  };
+}
+
+const SUBMISSION_INCLUDE = { task: { select: { reviewerId: true } }, decisions: true } as const;
+
+export class PrismaApprovalStore implements ApprovalStore {
+  constructor(private readonly db: PrismaClient) {}
+
+  async findSubmission(id: string): Promise<SubmissionRecord | null> {
+    const row = await this.db.approvalSubmission.findUnique({ where: { id }, include: SUBMISSION_INCLUDE });
+    return row ? toSubmissionRecord(row as SubmissionRow) : null;
+  }
+
+  async listForTask(taskId: string): Promise<SubmissionRecord[]> {
+    const rows = await this.db.approvalSubmission.findMany({
+      where: { taskId },
+      include: SUBMISSION_INCLUDE,
+      orderBy: { revisionNo: "asc" },
+    });
+    return rows.map((r) => toSubmissionRecord(r as SubmissionRow));
+  }
+
+  async listPendingFor(reviewerId: string): Promise<QueueRow[]> {
+    const rows = await this.db.approvalSubmission.findMany({
+      where: { decisions: { none: {} }, task: { reviewerId, status: "In Review", archivedAt: null } },
+      orderBy: { submittedAt: "asc" },
+    });
+    return rows.map((r) => ({ submissionId: r.id, taskId: r.taskId, submittedById: r.submittedById, revisionNo: r.revisionNo, submittedAt: r.submittedAt }));
+  }
+
+  async submit(input: SubmitInput, actorId: string): Promise<SubmissionRecord> {
+    return this.db.$transaction(async (tx) => {
+      const lock = await tx.task.updateMany({
+        where: { id: input.taskId, status: input.fromStatus, archivedAt: null },
+        data: input.toStatus !== null ? { status: input.toStatus } : { status: input.fromStatus },
+      });
+      if (lock.count !== 1) throw new StaleApprovalError();
+      if (input.toStatus !== null) {
+        await tx.taskStatusHistory.create({
+          data: { taskId: input.taskId, fromStatus: input.fromStatus, toStatus: input.toStatus, actorId },
+        });
+      }
+      const max = await tx.approvalSubmission.aggregate({ where: { taskId: input.taskId }, _max: { revisionNo: true } });
+      let row;
+      try {
+        row = await tx.approvalSubmission.create({
+          data: {
+            id: input.submissionId,
+            taskId: input.taskId,
+            submittedById: input.submittedById,
+            revisionNo: (max._max.revisionNo ?? 0) + 1,
+          },
+          include: SUBMISSION_INCLUDE,
+        });
+      } catch (err) {
+        // Another submission took this revision number first (unique taskId and revisionNo).
+        if ((err as { code?: string }).code === "P2002") throw new StaleApprovalError();
+        throw err;
+      }
+      const audit = buildAuditRecord(input.audit);
+      await tx.auditEvent.create({
+        data: { id: audit.id, actorId: audit.actorId, action: audit.action, entityType: audit.entityType, entityId: audit.entityId, payload: audit.payload as object, at: audit.at },
+      });
+      await createNotificationsIn(tx, input.notifications);
+      return toSubmissionRecord(row as SubmissionRow);
+    });
+  }
+
+  async decide(input: DecideInput): Promise<SubmissionRecord> {
+    return this.db.$transaction(async (tx) => {
+      const sub = await tx.approvalSubmission.findUnique({ where: { id: input.submissionId }, include: SUBMISSION_INCLUDE });
+      if (!sub) throw new StaleApprovalError();
+      const taskId = sub.taskId;
+      try {
+        await tx.approvalDecision.create({
+          data: { submissionId: input.submissionId, reviewerId: input.decidedById, decision: input.decision },
+        });
+      } catch (err) {
+        // One decision per submission (unique submissionId).
+        if ((err as { code?: string }).code === "P2002") throw new DuplicateDecisionError();
+        throw err;
+      }
+      const lock = await tx.task.updateMany({
+        where: { id: taskId, status: input.fromStatus, archivedAt: null },
+        data: input.toStatus !== null ? { status: input.toStatus } : { status: input.fromStatus },
+      });
+      if (lock.count !== 1) throw new StaleApprovalError();
+      if (input.toStatus !== null) {
+        await tx.taskStatusHistory.create({
+          data: { taskId, fromStatus: input.fromStatus, toStatus: input.toStatus, actorId: input.decidedById },
+        });
+      }
+      const audit = buildAuditRecord(input.audit);
+      await tx.auditEvent.create({
+        data: { id: audit.id, actorId: audit.actorId, action: audit.action, entityType: audit.entityType, entityId: audit.entityId, payload: audit.payload as object, at: audit.at },
+      });
+      await createNotificationsIn(tx, input.notifications);
+      const row = await tx.approvalSubmission.findUniqueOrThrow({ where: { id: input.submissionId }, include: SUBMISSION_INCLUDE });
+      return toSubmissionRecord(row as SubmissionRow);
+    });
+  }
+}
+
+// Notifications (Module 11). Written inside the transaction that caused them, so they exist only with the change.
+async function createNotificationsIn(tx: Prisma.TransactionClient | PrismaClient, items: NewNotification[]): Promise<void> {
+  if (items.length === 0) return;
+  await tx.notification.createMany({
+    data: items.map((n) => ({ recipientId: n.recipientId, kind: n.kind, taskId: n.taskId, payload: n.payload as object })),
+  });
+}
+
+type NotificationRow = {
+  id: string; recipientId: string; kind: string; taskId: string | null; payload: unknown;
+  readAt: Date | null; emailStatus: string; createdAt: Date;
+};
+
+function toNotificationRecord(row: NotificationRow): NotificationRecord {
+  return {
+    id: row.id,
+    recipientId: row.recipientId,
+    kind: row.kind as NotificationRecord["kind"],
+    taskId: row.taskId,
+    payload: (row.payload ?? {}) as Record<string, unknown>,
+    readAt: row.readAt,
+    emailStatus: row.emailStatus as EmailStatus,
+    createdAt: row.createdAt,
+  };
+}
+
+export class PrismaNotificationStore implements NotificationStore {
+  constructor(private readonly db: PrismaClient) {}
+
+  async listFor(recipientId: string, options: { unreadOnly: boolean; limit: number }): Promise<NotificationRecord[]> {
+    const rows = await this.db.notification.findMany({
+      where: { recipientId, readAt: options.unreadOnly ? null : undefined },
+      orderBy: { createdAt: "desc" },
+      take: options.limit,
+    });
+    return rows.map(toNotificationRecord);
+  }
+
+  async unreadCount(recipientId: string): Promise<number> {
+    return this.db.notification.count({ where: { recipientId, readAt: null } });
+  }
+
+  async markRead(id: string, recipientId: string): Promise<boolean> {
+    const result = await this.db.notification.updateMany({ where: { id, recipientId, readAt: null }, data: { readAt: new Date() } });
+    if (result.count === 1) return true;
+    // Already read counts as success; a notification that is not theirs does not.
+    return (await this.db.notification.count({ where: { id, recipientId } })) === 1;
+  }
+
+  async markAllRead(recipientId: string): Promise<number> {
+    const result = await this.db.notification.updateMany({ where: { recipientId, readAt: null }, data: { readAt: new Date() } });
+    return result.count;
+  }
+
+  async pendingEmail(limit: number): Promise<NotificationRecord[]> {
+    const rows = await this.db.notification.findMany({ where: { emailStatus: "pending" }, orderBy: { createdAt: "asc" }, take: limit });
+    return rows.map(toNotificationRecord);
+  }
+
+  async setEmailStatus(id: string, status: EmailStatus): Promise<void> {
+    await this.db.notification.update({ where: { id }, data: { emailStatus: status } });
+  }
+
+  // Outside a transaction. The approval path uses createNotificationsIn inside its own transaction instead.
+  add(items: NewNotification[]): NotificationRecord[] {
+    void this.db.notification.createMany({
+      data: items.map((n) => ({ recipientId: n.recipientId, kind: n.kind, taskId: n.taskId, payload: n.payload as object })),
+    });
+    return [];
   }
 }

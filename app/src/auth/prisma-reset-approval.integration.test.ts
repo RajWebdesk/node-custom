@@ -66,13 +66,18 @@ describe.skipIf(!enabled)("Prisma reset and approval stores", () => {
     expect(after).toBe(newHash);
   });
 
-  it("finds a submission with its designated reviewer and records one decision", async () => {
+  it("finds a submission with its designated reviewer, and accepts one decision only", async () => {
     const store = new PrismaApprovalStore(db);
     const before = await store.findSubmission(submissionId);
     expect(before?.reviewerId).toBe(reviewerId);
-    expect(before?.alreadyDecided).toBe(false);
-    await store.recordDecision(submissionId, reviewerId, "reject");
+    expect(before?.decision).toBeNull();
+    // Reject keeps the task In Review, so there is no status change (toStatus null).
+    await store.decide({ submissionId, decidedById: reviewerId, decision: "reject", fromStatus: "In Review", toStatus: null, audit: { actorId: reviewerId, action: "approval.decision_recorded", entityType: "ApprovalSubmission", entityId: submissionId, payload: {} }, notifications: [] });
     const after = await store.findSubmission(submissionId);
-    expect(after?.alreadyDecided).toBe(true);
+    expect(after?.decision).toBe("reject");
+    await expect(
+      store.decide({ submissionId, decidedById: reviewerId, decision: "approve", fromStatus: "In Review", toStatus: "Approved", audit: { actorId: reviewerId, action: "approval.decision_recorded", entityType: "ApprovalSubmission", entityId: submissionId, payload: {} }, notifications: [] }),
+    ).rejects.toThrow();
+    expect((await db.approvalDecision.count({ where: { submissionId } }))).toBe(1);
   });
 });

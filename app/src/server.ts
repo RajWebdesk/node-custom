@@ -5,6 +5,7 @@ import {
   PrismaApprovalStore,
   PrismaAllocationStore,
   PrismaAuditStore,
+  PrismaNotificationStore,
   PrismaResetStore,
   PrismaSessionStore,
   PrismaUserAdminStore,
@@ -34,6 +35,10 @@ createApp({
   taskStore: new PrismaTaskStore(db),
   audit: new PrismaAuditStore(db),
   allocations: new PrismaAllocationStore(db),
+  notifications: new PrismaNotificationStore(db),
+  dbCheck: async () => {
+    await db.$queryRaw`SELECT 1`;
+  },
 }).listen(port, () => {
   console.log(`api listening on ${port} (prototype)`);
 });
