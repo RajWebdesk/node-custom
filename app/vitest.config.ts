@@ -4,8 +4,8 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     include: ["src/**/*.test.ts"],
-    // Two workers: with 25 parallel workers on Windows, native worker crashes (0xC0000409) and
-    // ENOBUFS socket errors from supertest servers appeared in full runs (known issues 1 and 2).
-    maxWorkers: 2,
+    // Threads, not forked processes: forked workers hit native crashes (0xC0000409) and ENOBUFS
+    // socket errors from supertest servers in full runs (known issues 1 and 2). Threads passed clean runs.
+    pool: "threads",
   },
 });
