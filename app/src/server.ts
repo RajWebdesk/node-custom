@@ -1,4 +1,4 @@
-import { PrismaClient } from "@prisma/client";
+import { createPrismaClient } from "./db.js";
 import { loadConfig } from "./config/env.js";
 import { createApp } from "./api/app.js";
 import { PrismaApprovalStore, PrismaResetStore, PrismaSessionStore, PrismaUserAdminStore, PrismaUserStore } from "./auth/prisma-stores.js";
@@ -12,7 +12,7 @@ if (!result.ok) {
 }
 
 // Database-backed stores (D1 sessions, D2 Argon2id accounts). Prototype: authentication only.
-const db = new PrismaClient();
+const db = createPrismaClient();
 const port = Number(process.env.PORT ?? 3001);
 createApp({
   users: new PrismaUserStore(db),

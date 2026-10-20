@@ -1,4 +1,4 @@
-import { PrismaClient } from "@prisma/client";
+import { createPrismaClient } from "../db.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PrismaSessionStore, PrismaUserStore } from "./prisma-stores.js";
 import { hashPassword } from "./password.js";
@@ -8,7 +8,7 @@ const enabled = Boolean(process.env.DATABASE_URL);
 const email = `integration-${Date.now()}@example.test`;
 
 describe.skipIf(!enabled)("Prisma user and session stores", () => {
-  const db = new PrismaClient();
+  const db = createPrismaClient(process.env.DATABASE_URL ?? "postgresql://unused:unused@localhost:1/unused");
   let userId = "";
 
   beforeAll(async () => {

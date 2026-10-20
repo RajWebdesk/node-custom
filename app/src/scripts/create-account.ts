@@ -2,7 +2,7 @@
 // Usage (from app/):
 //   ACCOUNT_PASSWORD=<value> npx tsx src/scripts/create-account.ts <email> <name> <ADMINISTRATOR|MANAGER|EMPLOYEE>
 // The password is read from the environment only. It is never printed, logged, or committed.
-import { PrismaClient } from "@prisma/client";
+import { createPrismaClient } from "../db.js";
 import { hashPassword } from "../auth/password.js";
 import { ROLES, type Role } from "../domain/roles.js";
 
@@ -18,7 +18,7 @@ if (!password || password.length < 12) {
   process.exit(2);
 }
 
-const db = new PrismaClient();
+const db = createPrismaClient();
 try {
   const passwordHash = await hashPassword(password);
   await db.user.create({

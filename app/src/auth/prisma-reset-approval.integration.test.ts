@@ -1,4 +1,4 @@
-import { PrismaClient } from "@prisma/client";
+import { createPrismaClient } from "../db.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PrismaApprovalStore, PrismaResetStore, PrismaUserAdminStore } from "./prisma-stores.js";
 import { hashResetToken } from "./reset.js";
@@ -9,7 +9,7 @@ const enabled = Boolean(process.env.DATABASE_URL);
 const stamp = Date.now();
 
 describe.skipIf(!enabled)("Prisma reset and approval stores", () => {
-  const db = new PrismaClient();
+  const db = createPrismaClient(process.env.DATABASE_URL ?? "postgresql://unused:unused@localhost:1/unused");
   let reviewerId = "";
   let submitterId = "";
   let taskId = "";
