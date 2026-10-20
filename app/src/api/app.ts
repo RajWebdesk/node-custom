@@ -23,6 +23,9 @@ import { InMemoryTaskStore, type TaskStore } from "../tasks/task-store.js";
 import { InMemoryAuditStore, type AuditReader, type AuditStore } from "../audit/audit.js";
 import { activityHandler } from "./activity.js";
 import { dashboardHandler } from "./dashboard.js";
+import { taskReportHandler } from "./reports.js";
+import { settingsHandler } from "./settings.js";
+import { statusHistoryReportHandler, timeReportHandler } from "./report-history.js";
 import { listNotificationsHandler, markAllNotificationsReadHandler, markNotificationReadHandler } from "./notifications.js";
 import { consoleLogger, Metrics, requestObserver, silentLogger, withTimeout, type Logger } from "../observability/observability.js";
 import { InMemoryAllocationStore, type AllocationStore } from "../allocation/allocation-store.js";
@@ -219,6 +222,13 @@ export function createApp(options: AppOptions = {}): express.Express {
     audit: audit as AuditReader,
     directory: usersDeps.directory,
   }));
+  // Task reports (Module 13). Read-only; visibility follows the task list.
+  app.get("/api/v1/reports/tasks", requireSession(auth), taskReportHandler({ tasks: taskDeps.tasks, directory: usersDeps.directory }));
+  const historyReportDeps = { tasks: taskDeps.tasks, allocations: allocationDeps.allocations, directory: usersDeps.directory };
+  app.get("/api/v1/reports/time", requireSession(auth), timeReportHandler(historyReportDeps));
+  app.get("/api/v1/reports/history", requireSession(auth), statusHistoryReportHandler(historyReportDeps));
+  // Settings view for administrators (Task #13.4). Read-only.
+  app.get("/api/v1/admin/settings", requireSession(auth), requireAdministrator, settingsHandler());
   app.get("/api/v1/notifications", requireSession(auth), listNotificationsHandler({ notifications }));
   app.post("/api/v1/notifications/read-all", requireSession(auth), requireCsrf, markAllNotificationsReadHandler({ notifications }));
   app.post("/api/v1/notifications/:id/read", requireSession(auth), requireCsrf, markNotificationReadHandler({ notifications }));
@@ -227,8 +237,15 @@ export function createApp(options: AppOptions = {}): express.Express {
     res.status(404).json({ error: "not-found" });
   });
 
-  app.use((_err: unknown, _req: Request, res: Response, _next: NextFunction) => {
-    // Generic error body. Details are never returned.
+  app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+    // Client errors raised by the body parser (oversized or malformed JSON) keep their status, with a generic code.
+    const status = (err as { status?: unknown }).status;
+    if (typeof status === "number" && status >= 400 && status < 500) {
+      const code = status === 413 ? "payload-too-large" : status === 400 ? "malformed-request" : "client-error";
+      res.status(status).json({ error: code });
+      return;
+    }
+    // Anything else is a server fault. Details are never returned.
     res.status(500).json({ error: "internal-error" });
   });
 
