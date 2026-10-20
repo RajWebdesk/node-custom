@@ -45,13 +45,14 @@ export async function runDueReminders(db: PrismaClient, now: Date = new Date()):
 
   try {
     const reminderDate = new Date(`${local.date}T00:00:00Z`);
-    // Due within 24 hours means due today or tomorrow; anything earlier is overdue. Both are covered by due <= tomorrow.
-    const dueBy = new Date(`${nextDay(local.date)}T00:00:00Z`);
+    // Due within 24 hours means due today or tomorrow by calendar date; anything earlier is overdue. Compare by UTC
+    // calendar date, as dueStatus does: a due time later on tomorrow still counts (due date before the day after tomorrow).
+    const dueBefore = new Date(`${nextDay(nextDay(local.date))}T00:00:00Z`);
     const tasks = await db.task.findMany({
       where: {
         archivedAt: null,
         status: { not: "Approved" },
-        dueDate: { not: null, lte: dueBy },
+        dueDate: { not: null, lt: dueBefore },
         assignee: { status: "active" },
       },
       select: { id: true, assigneeId: true, dueDate: true },

@@ -34,7 +34,7 @@ describe.runIf(enabled)("due-reminder job (Task #11.4)", () => {
           assigneeId,
           pmId: reviewerId,
           reviewerId,
-          dueDate: new Date(`${due}T00:00:00Z`),
+          dueDate: new Date(due.includes("T") ? due : `${due}T00:00:00Z`),
           archivedAt: archived ? new Date() : null,
         },
       });
@@ -42,6 +42,8 @@ describe.runIf(enabled)("due-reminder job (Task #11.4)", () => {
     };
     await make("dueToday", SLOT_DAY, "To Do");
     await make("dueTomorrow", "2030-03-15", "In Progress");
+    await make("dueTomorrowLate", "2030-03-15T18:00:00Z", "To Do"); // a due time later on tomorrow still counts
+    await make("dayAfterTomorrow", "2030-03-16T00:00:00Z", "To Do"); // not within 24 hours
     await make("overdue", "2030-03-10", "To Do");
     await make("later", "2030-03-20", "To Do");
     await make("approved", SLOT_DAY, "Approved");
@@ -70,10 +72,10 @@ describe.runIf(enabled)("due-reminder job (Task #11.4)", () => {
     expect(outcome.status).toBe("done");
     const reminded = await db.reminder.findMany({ where: { taskId: { in: Object.values(taskIds) } } });
     const ids = reminded.map((r) => r.taskId).sort();
-    expect(ids).toEqual([taskIds.dueToday, taskIds.dueTomorrow, taskIds.overdue].sort());
+    expect(ids).toEqual([taskIds.dueToday, taskIds.dueTomorrow, taskIds.dueTomorrowLate, taskIds.overdue].sort());
 
     const notes = await db.notification.findMany({ where: { recipientId: assigneeId, kind: "task.reminder" } });
-    expect(notes).toHaveLength(3);
+    expect(notes).toHaveLength(4);
     const overdue = notes.find((n) => n.taskId === taskIds.overdue);
     expect((overdue!.payload as { overdue: boolean }).overdue).toBe(true);
   });
@@ -82,7 +84,7 @@ describe.runIf(enabled)("due-reminder job (Task #11.4)", () => {
     const again = await runDueReminders(db, SLOT_TIME);
     expect(again.status).toBe("already-done");
     const count = await db.reminder.count({ where: { taskId: { in: Object.values(taskIds) } } });
-    expect(count).toBe(3);
+    expect(count).toBe(4);
   });
 });
 
