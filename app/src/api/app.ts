@@ -17,9 +17,12 @@ import { decisionHandler, InMemoryApprovalStore, type ApprovalStore } from "./de
 import { createUserHandler, listUsersHandler, updateUserHandler } from "./users.js";
 import { InMemoryUserDirectory, type UserDirectory } from "../auth/user-directory.js";
 import { changePasswordHandler, getProfileHandler, updateProfileHandler } from "./profile.js";
-import { createTaskHandler, getTaskHandler, listAssignableUsersHandler, listTasksHandler, moveTaskStatusHandler, requireTaskManager, updateTaskHandler } from "./tasks.js";
+import { createTaskHandler, getTaskHandler, listAssignableUsersHandler, listTasksHandler, moveTaskStatusHandler, requireTaskManager, taskHistoryHandler, updateTaskHandler } from "./tasks.js";
 import { InMemoryTaskStore, type TaskStore } from "../tasks/task-store.js";
-import { InMemoryAuditStore, type AuditStore } from "../audit/audit.js";
+import { InMemoryAuditStore, type AuditReader, type AuditStore } from "../audit/audit.js";
+import { activityHandler } from "./activity.js";
+import { InMemoryAllocationStore, type AllocationStore } from "../allocation/allocation-store.js";
+import { adjustAllocationHandler, allocationHistoryHandler, listAllocationsHandler } from "./allocation.js";
 
 // Prototype API. Authentication (D1 sessions with CSRF, D2 Argon2id) is implemented against
 // in-memory stores. The Prisma-backed stores are added with the data layer.
@@ -32,7 +35,8 @@ export interface AppOptions {
   approvals?: ApprovalStore;
   userDirectory?: UserDirectory;
   taskStore?: TaskStore;
-  audit?: AuditStore;
+  audit?: AuditStore & AuditReader;
+  allocations?: AllocationStore;
 }
 
 const decisionBody = z.object({
@@ -146,8 +150,27 @@ export function createApp(options: AppOptions = {}): express.Express {
   // Task API (spec Module 6). Reads are filtered by role inside the handlers; writes need a manager or administrator.
   const taskDeps = { tasks: options.taskStore ?? new InMemoryTaskStore(), directory: usersDeps.directory, audit };
   app.get("/api/v1/tasks", requireSession(auth), listTasksHandler(taskDeps));
+
+  // Activity log for administrators (Task #9.2). Read-only.
+  app.get("/api/v1/activity", requireSession(auth), requireAdministrator, activityHandler({ audit, directory: usersDeps.directory }));
+
+  // Planned time allocation (Module 8). Reads are role-scoped in the handlers; only administrators change it.
+  const allocationDeps = {
+    allocations: options.allocations ?? new InMemoryAllocationStore(audit),
+    directory: usersDeps.directory,
+  };
+  app.get("/api/v1/allocations", requireSession(auth), listAllocationsHandler(allocationDeps));
+  app.get("/api/v1/allocations/:subjectId/history", requireSession(auth), allocationHistoryHandler(allocationDeps));
+  app.post(
+    "/api/v1/admin/allocations/:subjectId/adjust",
+    requireSession(auth),
+    requireCsrf,
+    requireAdministrator,
+    adjustAllocationHandler(allocationDeps),
+  );
   app.get("/api/v1/directory/users", requireSession(auth), requireTaskManager, listAssignableUsersHandler(taskDeps));
   app.get("/api/v1/tasks/:taskId", requireSession(auth), getTaskHandler(taskDeps));
+  app.get("/api/v1/tasks/:taskId/history", requireSession(auth), taskHistoryHandler(taskDeps));
   app.post("/api/v1/tasks", requireSession(auth), requireCsrf, requireTaskManager, createTaskHandler(taskDeps));
   app.patch("/api/v1/tasks/:taskId", requireSession(auth), requireCsrf, requireTaskManager, updateTaskHandler(taskDeps));
   app.post("/api/v1/tasks/:taskId/status", requireSession(auth), requireCsrf, moveTaskStatusHandler(taskDeps));

@@ -26,6 +26,9 @@ model User {
   roles                UserRole[]
   sessions             Session[]
   assignedTasks        Task[]     @relation("TaskAssignee")
+  allocation           Allocation? @relation("AllocationSubject")
+  allocationsUpdated   Allocation[] @relation("AllocationUpdatedBy")
+  allocationChanges    AllocationChange[] @relation("AllocationChangeActor")
   pmTasks              Task[]     @relation("TaskPm")
   reviewTasks          Task[]     @relation("TaskReviewer")
   createdAt            DateTime   @default(now())
@@ -114,10 +117,12 @@ model ApprovalDecision {
 
 model Allocation {
   id           String             @id @default(uuid())
-  subjectId    String
+  subjectId    String             @unique // one planned allocation per person
   plannedHours Decimal            @db.Decimal(6, 2)
   updatedById  String
   updatedAt    DateTime           @updatedAt
+  subject      User               @relation("AllocationSubject", fields: [subjectId], references: [id])
+  updatedBy    User               @relation("AllocationUpdatedBy", fields: [updatedById], references: [id])
   changes      AllocationChange[]
 }
 
@@ -131,6 +136,9 @@ model AllocationChange {
   actorId       String
   at            DateTime   @default(now())
   allocation    Allocation @relation(fields: [allocationId], references: [id])
+  actor         User       @relation("AllocationChangeActor", fields: [actorId], references: [id])
+
+  @@index([allocationId, at])
 }
 
 model AuditEvent {

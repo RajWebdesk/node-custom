@@ -7,8 +7,10 @@ import type { ApprovalStore, SubmissionRecord } from "../api/decisions.js";
 import type { Decision } from "../domain/approval.js";
 import { randomBytes } from "node:crypto";
 import { DuplicateEmailError, type NewUser, type UserDirectory, type UserPatch, type UserView } from "./user-directory.js";
-import type { AuditRecord, AuditStore } from "../audit/audit.js";
-import { StaleStatusError, type NewTask, type StatusChange, type TaskPatch, type TaskQuery, type TaskRecord, type TaskStore } from "../tasks/task-store.js";
+import type { AuditQuery, AuditReader, AuditRecord, AuditStore } from "../audit/audit.js";
+import { buildAuditRecord } from "../audit/audit.js";
+import { StaleAllocationError, type AllocationRow, type AllocationStore, type ApplyChangeInput, type ChangeRow } from "../allocation/allocation-store.js";
+import { StaleStatusError, type TaskHistoryRow, type NewTask, type StatusChange, type TaskPatch, type TaskQuery, type TaskRecord, type TaskStore } from "../tasks/task-store.js";
 
 // Database-backed stores for the Prisma schema (prisma/schema.prisma).
 // Roles are stored in UserRole; the Session row carries no roles and reads them from the user.
@@ -282,6 +284,11 @@ export class PrismaTaskStore implements TaskStore {
     return toTaskRecord(row);
   }
 
+  async historyFor(taskId: string): Promise<TaskHistoryRow[]> {
+    const rows = await this.db.taskStatusHistory.findMany({ where: { taskId }, orderBy: { at: "desc" } });
+    return rows.map((r) => ({ taskId: r.taskId, fromStatus: r.fromStatus ?? "", toStatus: r.toStatus, actorId: r.actorId, at: r.at }));
+  }
+
   async moveStatus(change: StatusChange): Promise<TaskRecord> {
     return this.db.$transaction(async (tx) => {
       const moved = await tx.task.updateMany({
@@ -304,8 +311,20 @@ export class PrismaTaskStore implements TaskStore {
 }
 
 // Audit records (Task #9.1). Insert only: the database refuses UPDATE, DELETE, and TRUNCATE.
-export class PrismaAuditStore implements AuditStore {
+export class PrismaAuditStore implements AuditStore, AuditReader {
   constructor(private readonly db: PrismaClient) {}
+
+  async query(query: AuditQuery): Promise<{ items: AuditRecord[]; total: number }> {
+    const where = { entityType: query.entityType, action: query.action, actorId: query.actorId };
+    const [rows, total] = await Promise.all([
+      this.db.auditEvent.findMany({ where, orderBy: { at: "desc" }, skip: (query.page - 1) * query.pageSize, take: query.pageSize }),
+      this.db.auditEvent.count({ where }),
+    ]);
+    return {
+      items: rows.map((r) => ({ id: r.id, at: r.at, actorId: r.actorId, action: r.action, entityType: r.entityType, entityId: r.entityId, payload: r.payload as Record<string, unknown> })),
+      total,
+    };
+  }
 
   async append(record: AuditRecord): Promise<void> {
     await this.db.auditEvent.create({
@@ -318,6 +337,102 @@ export class PrismaAuditStore implements AuditStore {
         payload: record.payload as object,
         at: record.at,
       },
+    });
+  }
+}
+
+// Planned allocation (Module 8). applyChange is one transaction: the allocation update only applies if the
+// stored value is still the expected one, and the change row and audit record are written in the same step.
+const toHours = (value: unknown): number => Number(String(value));
+
+export class PrismaAllocationStore implements AllocationStore {
+  constructor(private readonly db: PrismaClient) {}
+
+  async list(): Promise<AllocationRow[]> {
+    const rows = await this.db.allocation.findMany();
+    return rows.map((r) => ({ id: r.id, subjectId: r.subjectId, plannedHours: toHours(r.plannedHours), updatedById: r.updatedById, updatedAt: r.updatedAt }));
+  }
+
+  async findBySubject(subjectId: string): Promise<AllocationRow | null> {
+    const r = await this.db.allocation.findUnique({ where: { subjectId } });
+    return r ? { id: r.id, subjectId: r.subjectId, plannedHours: toHours(r.plannedHours), updatedById: r.updatedById, updatedAt: r.updatedAt } : null;
+  }
+
+  async history(subjectId: string): Promise<ChangeRow[]> {
+    const rows = await this.db.allocationChange.findMany({
+      where: { allocation: { subjectId } },
+      orderBy: { at: "desc" },
+    });
+    return rows.map((c) => ({
+      id: c.id,
+      subjectId,
+      previousHours: toHours(c.previousHours),
+      newHours: toHours(c.newHours),
+      delta: toHours(c.delta),
+      reason: c.reason,
+      actorId: c.actorId,
+      at: c.at,
+    }));
+  }
+
+  async applyChange(input: ApplyChangeInput): Promise<{ allocation: AllocationRow; change: ChangeRow }> {
+    return this.db.$transaction(async (tx) => {
+      const previous = input.expectedPrevious ?? 0;
+      const delta = Math.round((input.newHours - previous) * 100) / 100;
+      let row;
+      if (input.expectedPrevious === null) {
+        try {
+          row = await tx.allocation.create({
+            data: { subjectId: input.subjectId, plannedHours: input.newHours.toFixed(2), updatedById: input.actorId },
+          });
+        } catch (err) {
+          // Another request created the row first (unique subjectId).
+          if ((err as { code?: string }).code === "P2002") throw new StaleAllocationError();
+          throw err;
+        }
+      } else {
+        const moved = await tx.allocation.updateMany({
+          where: { subjectId: input.subjectId, plannedHours: previous.toFixed(2) },
+          data: { plannedHours: input.newHours.toFixed(2), updatedById: input.actorId },
+        });
+        if (moved.count !== 1) throw new StaleAllocationError();
+        row = await tx.allocation.findUniqueOrThrow({ where: { subjectId: input.subjectId } });
+      }
+      const change = await tx.allocationChange.create({
+        data: {
+          allocationId: row.id,
+          previousHours: previous.toFixed(2),
+          newHours: input.newHours.toFixed(2),
+          delta: delta.toFixed(2),
+          reason: input.reason,
+          actorId: input.actorId,
+        },
+      });
+      const audit = buildAuditRecord(input.audit);
+      await tx.auditEvent.create({
+        data: {
+          id: audit.id,
+          actorId: audit.actorId,
+          action: audit.action,
+          entityType: audit.entityType,
+          entityId: audit.entityId,
+          payload: audit.payload as object,
+          at: audit.at,
+        },
+      });
+      return {
+        allocation: { id: row.id, subjectId: row.subjectId, plannedHours: toHours(row.plannedHours), updatedById: row.updatedById, updatedAt: row.updatedAt },
+        change: {
+          id: change.id,
+          subjectId: input.subjectId,
+          previousHours: previous,
+          newHours: input.newHours,
+          delta,
+          reason: change.reason,
+          actorId: change.actorId,
+          at: change.at,
+        },
+      };
     });
   }
 }

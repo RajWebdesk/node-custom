@@ -3,6 +3,7 @@ import { loadConfig } from "./config/env.js";
 import { createApp } from "./api/app.js";
 import {
   PrismaApprovalStore,
+  PrismaAllocationStore,
   PrismaAuditStore,
   PrismaResetStore,
   PrismaSessionStore,
@@ -32,6 +33,7 @@ createApp({
   userDirectory: new PrismaUserDirectory(db),
   taskStore: new PrismaTaskStore(db),
   audit: new PrismaAuditStore(db),
+  allocations: new PrismaAllocationStore(db),
 }).listen(port, () => {
   console.log(`api listening on ${port} (prototype)`);
 });

@@ -223,3 +223,6 @@ td.num {
 .board { display: grid; grid-template-columns: repeat(5, minmax(14rem, 1fr)); gap: 1rem; overflow-x: auto; }
 .board-column h2 { font-size: 1rem; }
 .board-column article { margin-bottom: 0.75rem; }
+
+/* Plain-looking button for table row selection (Task #8.3). */
+.link-button { background: none; border: none; color: inherit; text-decoration: underline; cursor: pointer; padding: 0; font: inherit; }

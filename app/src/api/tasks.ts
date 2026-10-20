@@ -65,6 +65,32 @@ function actorOf(res: Response): Actor {
   return { id: session.userId, roles: session.roles as readonly Role[], isDesignatedReviewer: false };
 }
 
+// Status history for one task (Task #9.2). Same visibility as the task: employees see their own tasks only.
+export function taskHistoryHandler(deps: TasksDeps) {
+  return async (req: Request, res: Response) => {
+    try {
+      const p = taskIdParams.safeParse(req.params);
+      if (!p.success) {
+        res.status(400).json({ error: "validation-failed" });
+        return;
+      }
+      const task = await deps.tasks.findById(p.data.taskId);
+      if (!task || !canSeeTask(actorOf(res), task)) {
+        res.status(404).json({ error: "not-found" });
+        return;
+      }
+      const [rows, users] = await Promise.all([deps.tasks.historyFor(task.id), deps.directory.list()]);
+      const names = new Map(users.map((u) => [u.id, u.name]));
+      const items = rows
+        .sort((a, b) => b.at.getTime() - a.at.getTime())
+        .map((h) => ({ at: h.at, actorName: names.get(h.actorId) ?? "Former user", fromStatus: h.fromStatus, toStatus: h.toStatus }));
+      res.status(200).json({ items });
+    } catch {
+      res.status(500).json({ error: "internal-error" });
+    }
+  };
+}
+
 // Users a manager can pick as assignee or reviewer (Task #7.2). Active accounts only; no email addresses.
 export function listAssignableUsersHandler(deps: TasksDeps) {
   return async (_req: Request, res: Response) => {

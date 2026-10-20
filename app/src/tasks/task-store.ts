@@ -70,6 +70,7 @@ export class StaleStatusError extends Error {
 }
 
 export interface TaskStore {
+  historyFor(taskId: string): Promise<TaskHistoryRow[]>;
   list(query: TaskQuery): Promise<{ items: TaskRecord[]; total: number }>;
   findById(id: string): Promise<TaskRecord | null>;
   create(input: NewTask): Promise<TaskRecord>;
@@ -95,6 +96,10 @@ export interface TaskHistoryRow extends StatusChange {
 export class InMemoryTaskStore implements TaskStore {
   private readonly rows = new Map<string, TaskRecord>();
   readonly history: TaskHistoryRow[] = [];
+
+  async historyFor(taskId: string): Promise<TaskHistoryRow[]> {
+    return this.history.filter((h) => h.taskId === taskId).map((h) => ({ ...h }));
+  }
 
   async list(query: TaskQuery): Promise<{ items: TaskRecord[]; total: number }> {
     let rows = [...this.rows.values()].filter((t) => (query.archived ? t.archivedAt !== null : t.archivedAt === null));

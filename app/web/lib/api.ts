@@ -7,6 +7,9 @@ export const TASK_STATUSES = ["To Do", "In Progress", "In Review", "Approved", "
 export const FREE_STATUSES = ["To Do", "In Progress"] as const;
 export const TASK_PRIORITIES = ["Low", "Medium", "High"] as const;
 
+// Planned time change modes (Task #8.2). Must match app/src/domain/allocation.ts.
+export const ADJUST_MODES = ["set", "increase", "decrease"] as const;
+
 export interface Me {
   id: string;
   name: string;
@@ -73,6 +76,12 @@ const ERROR_TEXT: Record<string, string> = {
   "stale-status": "Someone else changed this task. The board has been refreshed.",
   "csrf-check-failed": "Your session check failed. Sign in again and retry.",
   forbidden: "You do not have permission to do that.",
+  "invalid-hours": "Enter a positive amount with at most two decimal places (zero is allowed only for Set to).",
+  "negative-result": "The change would take planned hours below zero.",
+  "too-large": "The total would exceed 9999.99 hours.",
+  "no-change": "Planned hours are already at that value.",
+  "invalid-subject": "This person is not active, so their allocation cannot change.",
+  "stale-allocation": "Planned hours changed while you were editing. The latest value is shown; try again.",
   "not-found": "This task could not be found.",
 };
 

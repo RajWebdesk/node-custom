@@ -15,6 +15,7 @@ import {
 } from "../lib/api";
 import { StateMessage } from "./StateMessage";
 import { TaskForm } from "./TaskForm";
+import { TaskHistory } from "./TaskHistory";
 
 // Task details (Task #7.2). Managers can edit, move between free statuses, and archive. Employees read only.
 // The API enforces the same rules for every action.
@@ -159,6 +160,7 @@ export function TaskDetail({ taskId }: { taskId: string }) {
           ) : null}
         </div>
       )}
+      <TaskHistory taskId={taskId} />
     </>
   );
 }

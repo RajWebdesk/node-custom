@@ -21,6 +21,18 @@ export interface AuditStore {
   append(record: AuditRecord): Promise<void>;
 }
 
+export interface AuditQuery {
+  entityType?: string;
+  action?: string;
+  actorId?: string;
+  page: number;
+  pageSize: number;
+}
+
+export interface AuditReader {
+  query(query: AuditQuery): Promise<{ items: AuditRecord[]; total: number }>;
+}
+
 // Keys whose values must never be stored: passwords, tokens, hashes, session and CSRF values.
 const SENSITIVE_KEY = /password|passwd|secret|token|hash|csrf|cookie|authorization|api[-_]?key/i;
 export const REDACTED = "[redacted]";
@@ -37,8 +49,9 @@ export function redact(value: unknown): unknown {
   return value;
 }
 
-export async function recordAudit(store: AuditStore, input: AuditInput): Promise<void> {
-  await store.append({
+// Builds the stored record: new id, timestamp, and a redacted payload.
+export function buildAuditRecord(input: AuditInput): AuditRecord {
+  return {
     id: randomBytes(16).toString("hex"),
     at: new Date(),
     actorId: input.actorId,
@@ -46,11 +59,15 @@ export async function recordAudit(store: AuditStore, input: AuditInput): Promise
     entityType: input.entityType,
     entityId: input.entityId,
     payload: redact(input.payload) as Record<string, unknown>,
-  });
+  };
 }
 
-// Prototype and test store. Exposes read access only.
-export class InMemoryAuditStore implements AuditStore {
+export async function recordAudit(store: AuditStore, input: AuditInput): Promise<void> {
+  await store.append(buildAuditRecord(input));
+}
+
+// Prototype and test store.
+export class InMemoryAuditStore implements AuditStore, AuditReader {
   private readonly rows: AuditRecord[] = [];
 
   async append(record: AuditRecord): Promise<void> {
@@ -59,5 +76,18 @@ export class InMemoryAuditStore implements AuditStore {
 
   list(): readonly AuditRecord[] {
     return this.rows;
+  }
+
+  async query(query: AuditQuery): Promise<{ items: AuditRecord[]; total: number }> {
+    const rows = this.rows
+      .filter(
+        (r) =>
+          (!query.entityType || r.entityType === query.entityType) &&
+          (!query.action || r.action === query.action) &&
+          (!query.actorId || r.actorId === query.actorId),
+      )
+      .sort((a, b) => b.at.getTime() - a.at.getTime());
+    const start = (query.page - 1) * query.pageSize;
+    return { items: rows.slice(start, start + query.pageSize), total: rows.length };
   }
 }
