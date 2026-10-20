@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { StateMessage } from "../../components/StateMessage";
@@ -74,6 +75,9 @@ export function LoginForm() {
         </div>
         <p id="login-note" className="kpi-label">
           Sign in with your account. Accounts are created by the administrator.
+        </p>
+        <p>
+          <Link href="/forgot-password">I have a reset token</Link>
         </p>
         <button className="button" type="submit" disabled={status === "submitting"}>
           {status === "submitting" ? "Signing in…" : "Sign in"}

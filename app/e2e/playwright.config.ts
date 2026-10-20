@@ -11,7 +11,7 @@ const WEB = "http://localhost:3100";
 export default defineConfig({
   testDir: ".",
   testMatch: /.*\.spec\.ts/,
-  timeout: 60_000,
+  timeout: 120_000, // the UAT journeys run several sign-ins in sequence
   workers: 1, // the journeys share one database
   use: { baseURL: WEB, trace: "retain-on-failure" },
   projects: [{ name: "chromium", use: { browserName: "chromium" } }],

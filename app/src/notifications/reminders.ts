@@ -6,6 +6,10 @@ import { localParts, REMINDER_SLOT_HOUR, APP_TIMEZONE, nextDay } from "../domain
 // America/Toronto slot has started, and only once per slot, using the ReminderRun row as the record.
 // Rule (confirmed 2026-10-19): tasks due within 24 hours and overdue tasks, one reminder per task per day.
 
+// A run that has been 'running' longer than this is treated as abandoned (the process stopped mid-run) and reclaimed.
+// Matches REMINDER_RUN_LOCK_TTL_SECONDS in .env.example (15 minutes).
+export const REMINDER_LOCK_TTL_MINUTES = 15;
+
 export type ReminderOutcome =
   | { status: "before-slot" }
   | { status: "already-done"; slotKey: string }
@@ -19,11 +23,17 @@ export async function runDueReminders(db: PrismaClient, now: Date = new Date()):
   const slotKey = `${local.date}T${String(REMINDER_SLOT_HOUR).padStart(2, "0")}:00`;
   const existing = await db.reminderRun.findUnique({ where: { slotKey } });
   if (existing?.status === "done") return { status: "already-done", slotKey };
-  if (existing?.status === "running") return { status: "running", slotKey };
+  const cutoff = new Date(now.getTime() - REMINDER_LOCK_TTL_MINUTES * 60_000);
+  if (existing?.status === "running" && existing.startedAt > cutoff) return { status: "running", slotKey };
 
-  // Claim the slot. A failed earlier run is reclaimed; a new slot is created.
+  // Claim the slot. A failed run, or a run abandoned past the lock TTL, is reclaimed; a new slot is created.
+  // The update applies only to the exact state that was read, so two processes cannot both claim it.
   if (existing) {
-    await db.reminderRun.update({ where: { slotKey }, data: { status: "running", startedAt: now, finishedAt: null } });
+    const claimed = await db.reminderRun.updateMany({
+      where: { slotKey, status: existing.status, startedAt: existing.startedAt },
+      data: { status: "running", startedAt: now, finishedAt: null },
+    });
+    if (claimed.count !== 1) return { status: "running", slotKey };
   } else {
     try {
       await db.reminderRun.create({ data: { slotKey, status: "running", startedAt: now } });

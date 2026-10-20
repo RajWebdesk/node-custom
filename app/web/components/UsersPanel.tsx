@@ -53,6 +53,8 @@ export function UsersPanel() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [editRole, setEditRole] = useState<Role>("EMPLOYEE");
+  // A reset token is shown once, to the administrator, for the person it is issued to (Task #4.3).
+  const [issued, setIssued] = useState<{ name: string; token: string; expiresAt: string } | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -127,6 +129,19 @@ export function UsersPanel() {
     if (res.ok) {
       setMessage(next === "deactivated" ? `${user.name} was deactivated and signed out.` : `${user.name} was reactivated.`);
       void load();
+      return;
+    }
+    setMessage(await readError(res));
+  }
+
+  async function onIssueToken(user: UserRow) {
+    setMessage(null);
+    setIssued(null);
+    const res = await send("POST", `/api/v1/admin/users/${encodeURIComponent(user.id)}/reset-token`, {});
+    if (!res) return;
+    if (res.status === 201) {
+      const body = (await res.json()) as { token: string; expiresAt: string };
+      setIssued({ name: user.name, token: body.token, expiresAt: body.expiresAt });
       return;
     }
     setMessage(await readError(res));
@@ -207,6 +222,16 @@ export function UsersPanel() {
         </button>
       </form>
 
+      {issued ? (
+        <div className="card" role="status" aria-label="Reset token">
+          <h2>Reset token for {issued.name}</h2>
+          <p>Give this to {issued.name} through a secure channel. It is shown once, works once, and expires at {issued.expiresAt.slice(0, 16).replace("T", " ")} UTC.</p>
+          <p><code>{issued.token}</code></p>
+          <p>They open the sign-in help and enter it with a new password of at least 12 characters.</p>
+          <button className="button" type="button" onClick={() => setIssued(null)}>Done</button>
+        </div>
+      ) : null}
+
       {message ? (
         <div className="state state-empty" role="status">
           <p>{message}</p>
@@ -242,6 +267,9 @@ export function UsersPanel() {
                     </button>{" "}
                     <button className="button" type="button" onClick={() => void onToggle(user)}>
                       {user.status === "active" ? "Deactivate" : "Reactivate"}
+                    </button>{" "}
+                    <button className="button" type="button" onClick={() => void onIssueToken(user)} disabled={user.status !== "active"}>
+                      Issue reset token
                     </button>
                   </td>
                 </tr>

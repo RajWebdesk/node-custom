@@ -1,5 +1,8 @@
 // Shared API client for the web app. The API enforces every rule; these helpers only send requests and show results.
 
+// Pages a signed-out visitor may use. A 401 here must not send them to sign-in.
+const PUBLIC_PAGES = ["/login", "/forgot-password"];
+
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
 
 // Interim lists (PLACEHOLDER: the spec does not define them). Must match app/src/domain/tasks.ts.
@@ -56,7 +59,7 @@ export async function apiRequest(path: string, init: { method?: string; body?: u
     body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
   });
   // Never redirect from the sign-in page itself: a page that calls the API while signed out would reload forever.
-  if (res.status === 401 && window.location.pathname !== "/login") window.location.assign("/login");
+  if (res.status === 401 && !PUBLIC_PAGES.includes(window.location.pathname)) window.location.assign("/login");
   return res;
 }
 

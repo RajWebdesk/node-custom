@@ -85,3 +85,37 @@ describe.runIf(enabled)("due-reminder job (Task #11.4)", () => {
     expect(count).toBe(3);
   });
 });
+
+// G5 recovery drill (milestone regression for the reminder job). Simulates a process that stopped mid-run.
+describe.runIf(enabled)("due-reminder recovery drill (G5)", () => {
+  const DAY = "2030-03-21";
+  const NOW = new Date("2030-03-21T14:00:00Z"); // 10:00 Toronto
+  const KEY = `${DAY}T09:00`;
+
+  afterAll(async () => {
+    await db.reminderRun.deleteMany({ where: { slotKey: KEY } });
+  });
+
+  it("does not run twice while a run is recent, reclaims a run abandoned past the lock, and never repeats a finished slot", async () => {
+    // A run that has just started: another process is working on it, so this one stays out.
+    await db.reminderRun.create({ data: { slotKey: KEY, status: "running", startedAt: NOW } });
+    expect((await runDueReminders(db, NOW)).status).toBe("running");
+
+    // The process died: the run has been 'running' for 60 minutes. The next run reclaims it and finishes.
+    await db.reminderRun.update({ where: { slotKey: KEY }, data: { startedAt: new Date(NOW.getTime() - 60 * 60_000) } });
+    const recovered = await runDueReminders(db, NOW);
+    expect(recovered.status).toBe("done");
+    expect((await db.reminderRun.findUniqueOrThrow({ where: { slotKey: KEY } })).status).toBe("done");
+
+    // Once done, the slot is never repeated that day.
+    expect((await runDueReminders(db, NOW)).status).toBe("already-done");
+  });
+
+  it("reclaims a run that failed earlier and records the new outcome", async () => {
+    const failedKey = "2030-03-22T09:00";
+    await db.reminderRun.create({ data: { slotKey: failedKey, status: "failed", startedAt: NOW } });
+    const outcome = await runDueReminders(db, new Date("2030-03-22T14:00:00Z"));
+    expect(outcome.status).toBe("done");
+    await db.reminderRun.deleteMany({ where: { slotKey: failedKey } });
+  });
+});
