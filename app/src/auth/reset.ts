@@ -25,6 +25,8 @@ export interface ResetStore {
 export interface UserAdminStore {
   findById(id: string): Promise<{ id: string; roles: readonly Role[]; isDesignatedReviewer: boolean } | null>;
   setPasswordHash(id: string, passwordHash: string): Promise<void>;
+  // Used only to verify a user's own current password (Task #5.2). Never returned to clients.
+  getPasswordHash(id: string): Promise<string | null>;
 }
 
 export function hashResetToken(token: string): string {

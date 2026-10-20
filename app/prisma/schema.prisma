@@ -25,6 +25,9 @@ model User {
   isDesignatedReviewer Boolean    @default(false) // spec Module 10: only the designated reviewer approves
   roles                UserRole[]
   sessions             Session[]
+  assignedTasks        Task[]     @relation("TaskAssignee")
+  pmTasks              Task[]     @relation("TaskPm")
+  reviewTasks          Task[]     @relation("TaskReviewer")
   createdAt            DateTime   @default(now())
 }
 
@@ -70,6 +73,12 @@ model Task {
   history     TaskStatusHistory[]
   submissions ApprovalSubmission[]
   reminders   Reminder[]
+  assignee    User                @relation("TaskAssignee", fields: [assigneeId], references: [id])
+  pm          User                @relation("TaskPm", fields: [pmId], references: [id])
+  reviewer    User                @relation("TaskReviewer", fields: [reviewerId], references: [id])
+
+  @@index([assigneeId])
+  @@index([status, archivedAt])
 }
 
 model TaskStatusHistory {

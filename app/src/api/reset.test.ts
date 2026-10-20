@@ -25,6 +25,7 @@ async function setup() {
       const r = records.find((x) => x.id === id);
       if (r) r.passwordHash = hash;
     },
+    getPasswordHash: async (id) => records.find((x) => x.id === id)?.passwordHash ?? null,
   };
   const sessions = new InMemorySessionStore();
   const resets = new InMemoryResetStore();

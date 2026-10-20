@@ -4,6 +4,7 @@ import { DECISIONS, decideApproval, type Decision } from "../domain/approval.js"
 import type { Actor, Role } from "../domain/roles.js";
 import type { SessionRecord } from "../auth/session.js";
 import type { UserAdminStore } from "../auth/reset.js";
+import { recordAudit, type AuditStore } from "../audit/audit.js";
 
 // Approval decisions (spec Module 10). Rules live in domain/approval.ts; this handler loads
 // the submission and the actor, applies the rules, and records the decision.
@@ -44,6 +45,7 @@ const body = z.object({ decision: z.enum(DECISIONS as [Decision, ...Decision[]])
 export interface DecisionDeps {
   users: UserAdminStore; // findById returns the reviewer flag and roles
   approvals: ApprovalStore;
+  audit: AuditStore;
 }
 
 export function decisionHandler(deps: DecisionDeps) {
@@ -79,6 +81,14 @@ export function decisionHandler(deps: DecisionDeps) {
         return;
       }
       await deps.approvals.recordDecision(submission.id, actor.id, result.outcome);
+      await recordAudit(deps.audit, {
+        actorId: actor.id,
+        action: "approval.decision_recorded",
+        entityType: "ApprovalSubmission",
+        entityId: submission.id,
+        payload: { taskId: submission.taskId, decision: result.outcome, taskStaysInReview: result.taskStaysInReview },
+      });
+
       res.status(201).json({ outcome: result.outcome, taskStaysInReview: result.taskStaysInReview });
     } catch {
       res.status(500).json({ error: "internal-error" });

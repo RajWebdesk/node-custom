@@ -218,3 +218,8 @@ td.num {
 .narrow {
   max-width: 420px;
 }
+
+/* Kanban board (Task #7.3). Columns scroll sideways on narrow screens. */
+.board { display: grid; grid-template-columns: repeat(5, minmax(14rem, 1fr)); gap: 1rem; overflow-x: auto; }
+.board-column h2 { font-size: 1rem; }
+.board-column article { margin-bottom: 0.75rem; }

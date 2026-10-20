@@ -14,6 +14,7 @@ const NAV: { href: string; label: string; current?: boolean }[] = [
   { href: "/roles", label: "Roles" },
   { href: "/email-templates", label: "Email templates" },
   { href: "/activity", label: "Activity" },
+  { href: "/profile", label: "Profile" },
   { href: "/settings", label: "Settings" },
 ];
 
@@ -47,7 +48,7 @@ export function Shell({ current, children }: { current: string; children: ReactN
           </header>
           <main id="main" className="main">
             <p className="banner">
-              Pilot prototype. Mock data only. Authentication is not implemented. Hiding a nav item is
+              Pilot prototype. Sign-in is connected to the local API; module pages still show mock data. Hiding a nav item is
               convenience, not security.
             </p>
             {children}

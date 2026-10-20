@@ -10,11 +10,13 @@ import {
   type UserAdminStore,
 } from "../auth/reset.js";
 import type { SessionRecord, SessionStore } from "../auth/session.js";
+import { recordAudit, type AuditStore } from "../audit/audit.js";
 
 export interface ResetDeps {
   users: UserAdminStore;
   resets: ResetStore;
   sessions: SessionStore;
+  audit: AuditStore;
 }
 
 // Only an authenticated Administrator may issue a reset token (spec Task #5.1 and #4.3).
@@ -52,6 +54,13 @@ export function issueResetHandler(deps: ResetDeps) {
         issuedById: session.userId,
         expiresAt,
       });
+      await recordAudit(deps.audit, {
+        actorId: session.userId,
+        action: "user.reset_token_issued",
+        entityType: "User",
+        entityId: target.id,
+        payload: { expiresAt: expiresAt.toISOString() },
+      });
       res.status(201).json({ token, expiresAt: expiresAt.toISOString() });
     } catch {
       res.status(500).json({ error: "internal-error" });
@@ -84,6 +93,13 @@ export function redeemResetHandler(deps: ResetDeps) {
       await deps.users.setPasswordHash(record.userId, passwordHash);
       await deps.resets.markUsed(record.id);
       await deps.sessions.revokeAllForUser(record.userId);
+      await recordAudit(deps.audit, {
+        actorId: record.userId,
+        action: "user.password_reset_completed",
+        entityType: "User",
+        entityId: record.userId,
+        payload: {},
+      });
       res.status(204).end();
     } catch {
       res.status(500).json({ error: "internal-error" });

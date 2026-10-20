@@ -14,6 +14,12 @@ import {
 } from "./auth.js";
 import { issueResetHandler, redeemResetHandler, requireAdministrator, type ResetDeps } from "./reset.js";
 import { decisionHandler, InMemoryApprovalStore, type ApprovalStore } from "./decisions.js";
+import { createUserHandler, listUsersHandler, updateUserHandler } from "./users.js";
+import { InMemoryUserDirectory, type UserDirectory } from "../auth/user-directory.js";
+import { changePasswordHandler, getProfileHandler, updateProfileHandler } from "./profile.js";
+import { createTaskHandler, getTaskHandler, listAssignableUsersHandler, listTasksHandler, moveTaskStatusHandler, requireTaskManager, updateTaskHandler } from "./tasks.js";
+import { InMemoryTaskStore, type TaskStore } from "../tasks/task-store.js";
+import { InMemoryAuditStore, type AuditStore } from "../audit/audit.js";
 
 // Prototype API. Authentication (D1 sessions with CSRF, D2 Argon2id) is implemented against
 // in-memory stores. The Prisma-backed stores are added with the data layer.
@@ -24,6 +30,9 @@ export interface AppOptions {
   userAdmin?: UserAdminStore;
   resets?: ResetStore;
   approvals?: ApprovalStore;
+  userDirectory?: UserDirectory;
+  taskStore?: TaskStore;
+  audit?: AuditStore;
 }
 
 const decisionBody = z.object({
@@ -35,6 +44,8 @@ const submissionParams = z.object({
 });
 
 export function createApp(options: AppOptions = {}): express.Express {
+  // One audit store for every business action in this app instance.
+  const audit = options.audit ?? new InMemoryAuditStore();
   const auth: AuthDeps = {
     // With no user store supplied, nobody can log in. This is the safe default.
     users: options.users ?? { findByEmail: async () => null },
@@ -54,7 +65,7 @@ export function createApp(options: AppOptions = {}): express.Express {
       res.setHeader("Access-Control-Allow-Origin", webOrigin);
       res.setHeader("Access-Control-Allow-Credentials", "true");
       res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-CSRF-Token");
-      res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+      res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS");
       res.setHeader("Vary", "Origin");
     }
     if (req.method === "OPTIONS") {
@@ -81,9 +92,10 @@ export function createApp(options: AppOptions = {}): express.Express {
   });
 
   const resetDeps: ResetDeps = {
-    users: options.userAdmin ?? { findById: async () => null, setPasswordHash: async () => undefined },
+    users: options.userAdmin ?? { findById: async () => null, setPasswordHash: async () => undefined, getPasswordHash: async () => null },
     resets: options.resets ?? new InMemoryResetStore(),
     sessions: auth.sessions,
+    audit,
   };
 
   app.post("/api/v1/auth/login", loginHandler(auth));
@@ -96,6 +108,49 @@ export function createApp(options: AppOptions = {}): express.Express {
     issueResetHandler(resetDeps),
   );
   app.post("/api/v1/auth/reset", redeemResetHandler(resetDeps));
+
+  // User administration (spec Task #5.1). Administrator only; writes also need the CSRF token.
+  const usersDeps = {
+    directory: options.userDirectory ?? new InMemoryUserDirectory(),
+    sessions: auth.sessions,
+    audit,
+  };
+  app.get("/api/v1/admin/users", requireSession(auth), requireAdministrator, listUsersHandler(usersDeps));
+  app.post(
+    "/api/v1/admin/users",
+    requireSession(auth),
+    requireCsrf,
+    requireAdministrator,
+    createUserHandler(usersDeps),
+  );
+  app.patch(
+    "/api/v1/admin/users/:userId",
+    requireSession(auth),
+    requireCsrf,
+    requireAdministrator,
+    updateUserHandler(usersDeps),
+  );
+
+  // Self-service profile and password change (Task #5.2). Any signed-in user, for their own account only.
+  const profileDeps = {
+    directory: usersDeps.directory,
+    userAdmin: resetDeps.users,
+    sessions: auth.sessions,
+    secureCookies: auth.secureCookies,
+    audit,
+  };
+  app.get("/api/v1/me", requireSession(auth), getProfileHandler(profileDeps));
+  app.patch("/api/v1/me", requireSession(auth), requireCsrf, updateProfileHandler(profileDeps));
+  app.post("/api/v1/me/password", requireSession(auth), requireCsrf, changePasswordHandler(profileDeps));
+
+  // Task API (spec Module 6). Reads are filtered by role inside the handlers; writes need a manager or administrator.
+  const taskDeps = { tasks: options.taskStore ?? new InMemoryTaskStore(), directory: usersDeps.directory, audit };
+  app.get("/api/v1/tasks", requireSession(auth), listTasksHandler(taskDeps));
+  app.get("/api/v1/directory/users", requireSession(auth), requireTaskManager, listAssignableUsersHandler(taskDeps));
+  app.get("/api/v1/tasks/:taskId", requireSession(auth), getTaskHandler(taskDeps));
+  app.post("/api/v1/tasks", requireSession(auth), requireCsrf, requireTaskManager, createTaskHandler(taskDeps));
+  app.patch("/api/v1/tasks/:taskId", requireSession(auth), requireCsrf, requireTaskManager, updateTaskHandler(taskDeps));
+  app.post("/api/v1/tasks/:taskId/status", requireSession(auth), requireCsrf, moveTaskStatusHandler(taskDeps));
   app.post("/api/v1/auth/logout", requireSession(auth), requireCsrf, logoutHandler(auth));
 
   // Approval decisions (spec Module 10): authenticated, CSRF-checked, designated reviewer only.
@@ -106,6 +161,7 @@ export function createApp(options: AppOptions = {}): express.Express {
     decisionHandler({
       users: resetDeps.users,
       approvals: options.approvals ?? new InMemoryApprovalStore(),
+      audit,
     }),
   );
 

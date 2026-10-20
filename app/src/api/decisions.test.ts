@@ -23,6 +23,7 @@ async function setup() {
       return r ? { id: r.id, roles: r.roles, isDesignatedReviewer: r.isDesignatedReviewer } : null;
     },
     setPasswordHash: async () => undefined,
+    getPasswordHash: async () => null,
   };
   const approvals = new InMemoryApprovalStore();
   approvals.add({ id: "s-1", taskId: "t-1", submittedById: "u-emp", reviewerId: "u-as", alreadyDecided: false });

@@ -12,12 +12,6 @@ export const mockTasks = [
   { title: "Sample task B", status: "In Progress", due: "Sample date", plannedHours: 5 },
 ];
 
-export const mockUsers = [
-  { name: "Sample User A", email: "sample-a@example.test", role: "Administrator", status: "active" },
-  { name: "Sample User B", email: "sample-b@example.test", role: "Manager", status: "active" },
-  { name: "Sample User C", email: "sample-c@example.test", role: "Employee", status: "deactivated" },
-];
-
 export const mockAllocations = [
   { subject: "Sample person A", plannedHours: 20, updatedBy: "Sample admin", updatedAt: "Sample date" },
   { subject: "Sample person B", plannedHours: 18, updatedBy: "Sample admin", updatedAt: "Sample date" },
