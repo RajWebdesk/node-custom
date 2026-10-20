@@ -218,3 +218,19 @@ td.num {
 .narrow {
   max-width: 420px;
 }
+
+/* Kanban board (Task #7.3). Columns scroll sideways on narrow screens. */
+.board { display: grid; grid-template-columns: repeat(5, minmax(14rem, 1fr)); gap: 1rem; overflow-x: auto; }
+.board-column h2 { font-size: 1rem; }
+.board-column article { margin-bottom: 0.75rem; }
+
+/* Plain-looking button for table row selection (Task #8.3). */
+.link-button { background: none; border: none; color: inherit; text-decoration: underline; cursor: pointer; padding: 0; font: inherit; }
+
+/* Dashboard metrics (Task #12.2). Each metric is a link to the list it counts. */
+.kpi-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr)); gap: 1rem; }
+.kpi { display: flex; flex-direction: column; text-decoration: none; color: inherit; }
+.kpi-value { font-size: 1.75rem; font-weight: 600; }
+
+/* Report bars (Task #13.2). The width is set inline; the table beside it carries the numbers. */
+.bar-table .bar { background: var(--accent, #2b5ea7); height: 0.75rem; border-radius: 2px; min-width: 2px; }

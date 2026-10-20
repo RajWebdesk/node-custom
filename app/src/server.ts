@@ -1,7 +1,18 @@
 import { createPrismaClient } from "./db.js";
 import { loadConfig } from "./config/env.js";
 import { createApp } from "./api/app.js";
-import { PrismaApprovalStore, PrismaResetStore, PrismaSessionStore, PrismaUserAdminStore, PrismaUserStore } from "./auth/prisma-stores.js";
+import {
+  PrismaApprovalStore,
+  PrismaAllocationStore,
+  PrismaAuditStore,
+  PrismaNotificationStore,
+  PrismaResetStore,
+  PrismaSessionStore,
+  PrismaUserAdminStore,
+  PrismaTaskStore,
+  PrismaUserDirectory,
+  PrismaUserStore,
+} from "./auth/prisma-stores.js";
 
 // Startup: validate configuration first. Refuse to serve if it is invalid.
 const result = loadConfig(process.env);
@@ -20,6 +31,14 @@ createApp({
   userAdmin: new PrismaUserAdminStore(db),
   resets: new PrismaResetStore(db),
   approvals: new PrismaApprovalStore(db),
+  userDirectory: new PrismaUserDirectory(db),
+  taskStore: new PrismaTaskStore(db),
+  audit: new PrismaAuditStore(db),
+  allocations: new PrismaAllocationStore(db),
+  notifications: new PrismaNotificationStore(db),
+  dbCheck: async () => {
+    await db.$queryRaw`SELECT 1`;
+  },
 }).listen(port, () => {
   console.log(`api listening on ${port} (prototype)`);
 });
