@@ -11,7 +11,7 @@ import { buildAuditRecord } from "../audit/audit.js";
 import { StaleAllocationError, type AllocationRow, type AllocationStore, type ApplyChangeInput, type ChangeRow } from "../allocation/allocation-store.js";
 import { DuplicateDecisionError, StaleApprovalError, type ApprovalStore, type DecideInput, type QueueRow, type SubmissionRecord, type SubmitInput } from "../approvals/approval-store.js";
 import type { EmailStatus, NewNotification, NotificationRecord, NotificationStore } from "../notifications/notification-store.js";
-import { StaleStatusError, type TaskHistoryRow, type NewTask, type StatusChange, type TaskPatch, type TaskQuery, type TaskRecord, type TaskStore } from "../tasks/task-store.js";
+import { StaleStatusError, type TaskAudit, type TaskHistoryRow, type NewTask, type StatusChange, type TaskPatch, type TaskQuery, type TaskRecord, type TaskStore } from "../tasks/task-store.js";
 
 // Database-backed stores for the Prisma schema (prisma/schema.prisma).
 // Roles are stored in UserRole; the Session row carries no roles and reads them from the user.
@@ -221,6 +221,12 @@ function toTaskRecord(row: TaskRow): TaskRecord {
   };
 }
 
+// The audit row for a task change, built the same way as the other stores (redaction and id applied here).
+function taskAuditRow(audit: TaskAudit, entityId: string) {
+  const record = buildAuditRecord({ ...audit, entityType: "Task", entityId });
+  return { id: record.id, actorId: record.actorId, action: record.action, entityType: record.entityType, entityId: record.entityId, payload: record.payload as object, at: record.at };
+}
+
 export class PrismaTaskStore implements TaskStore {
   constructor(private readonly db: PrismaClient) {}
 
@@ -248,16 +254,23 @@ export class PrismaTaskStore implements TaskStore {
     return row ? toTaskRecord(row) : null;
   }
 
-  async create(input: NewTask): Promise<TaskRecord> {
-    const row = await this.db.task.create({ data: input });
-    return toTaskRecord(row);
+  // The change and its audit record (when given) are written in one transaction, so neither can exist alone.
+  async create(input: NewTask, audit?: TaskAudit): Promise<TaskRecord> {
+    return this.db.$transaction(async (tx) => {
+      const row = await tx.task.create({ data: input });
+      if (audit) await tx.auditEvent.create({ data: taskAuditRow(audit, row.id) });
+      return toTaskRecord(row);
+    });
   }
 
-  async update(id: string, patch: TaskPatch): Promise<TaskRecord | null> {
-    const exists = await this.db.task.findUnique({ where: { id }, select: { id: true } });
-    if (!exists) return null;
-    const row = await this.db.task.update({ where: { id }, data: patch });
-    return toTaskRecord(row);
+  async update(id: string, patch: TaskPatch, audit?: TaskAudit): Promise<TaskRecord | null> {
+    return this.db.$transaction(async (tx) => {
+      const exists = await tx.task.findUnique({ where: { id }, select: { id: true } });
+      if (!exists) return null;
+      const row = await tx.task.update({ where: { id }, data: patch });
+      if (audit) await tx.auditEvent.create({ data: taskAuditRow(audit, id) });
+      return toTaskRecord(row);
+    });
   }
 
   async historyFor(taskId: string): Promise<TaskHistoryRow[]> {
@@ -265,7 +278,7 @@ export class PrismaTaskStore implements TaskStore {
     return rows.map((r) => ({ taskId: r.taskId, fromStatus: r.fromStatus ?? "", toStatus: r.toStatus, actorId: r.actorId, at: r.at }));
   }
 
-  async moveStatus(change: StatusChange): Promise<TaskRecord> {
+  async moveStatus(change: StatusChange, audit?: TaskAudit): Promise<TaskRecord> {
     return this.db.$transaction(async (tx) => {
       const moved = await tx.task.updateMany({
         where: { id: change.taskId, status: change.fromStatus },
@@ -280,6 +293,7 @@ export class PrismaTaskStore implements TaskStore {
           actorId: change.actorId,
         },
       });
+      if (audit) await tx.auditEvent.create({ data: taskAuditRow(audit, change.taskId) });
       const row = await tx.task.findUniqueOrThrow({ where: { id: change.taskId } });
       return toTaskRecord(row);
     });
