@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { buildAuditRecord, type AuditInput, type AuditStore } from "../audit/audit.js";
 
 // Task persistence (spec Module 6). The Prisma implementation is in auth/prisma-stores.ts.
 
@@ -69,15 +70,19 @@ export class StaleStatusError extends Error {
   }
 }
 
+// Audit input for a task change. The entity is the task itself, so the store fills entityType and entityId.
+export type TaskAudit = Omit<AuditInput, "entityType" | "entityId">;
+
 export interface TaskStore {
   historyFor(taskId: string): Promise<TaskHistoryRow[]>;
   list(query: TaskQuery): Promise<{ items: TaskRecord[]; total: number }>;
   findById(id: string): Promise<TaskRecord | null>;
-  create(input: NewTask): Promise<TaskRecord>;
-  update(id: string, patch: TaskPatch): Promise<TaskRecord | null>;
+  // When an audit input is given, the audit record is written in the same step as the change (spec Module 9).
+  create(input: NewTask, audit?: TaskAudit): Promise<TaskRecord>;
+  update(id: string, patch: TaskPatch, audit?: TaskAudit): Promise<TaskRecord | null>;
   // Moves the task only if its status is still fromStatus, and writes the history row in the same step.
   // Throws StaleStatusError when another change moved it first.
-  moveStatus(change: StatusChange): Promise<TaskRecord>;
+  moveStatus(change: StatusChange, audit?: TaskAudit): Promise<TaskRecord>;
 }
 
 const SORT_KEYS: Record<TaskSortField, (t: TaskRecord) => string | number> = {
@@ -96,6 +101,8 @@ export interface TaskHistoryRow extends StatusChange {
 export class InMemoryTaskStore implements TaskStore {
   private readonly rows = new Map<string, TaskRecord>();
   readonly history: TaskHistoryRow[] = [];
+
+  constructor(private readonly audit?: AuditStore) {}
 
   async historyFor(taskId: string): Promise<TaskHistoryRow[]> {
     return this.history.filter((h) => h.taskId === taskId).map((h) => ({ ...h }));
@@ -125,25 +132,32 @@ export class InMemoryTaskStore implements TaskStore {
     return row ? copy(row) : null;
   }
 
-  async create(input: NewTask): Promise<TaskRecord> {
+  async create(input: NewTask, audit?: TaskAudit): Promise<TaskRecord> {
     const row: TaskRecord = { ...input, id: randomBytes(16).toString("hex"), archivedAt: null, createdAt: new Date() };
     this.rows.set(row.id, row);
+    await this.recordAudit(audit, row.id);
     return copy(row);
   }
 
-  async update(id: string, patch: TaskPatch): Promise<TaskRecord | null> {
+  async update(id: string, patch: TaskPatch, audit?: TaskAudit): Promise<TaskRecord | null> {
     const row = this.rows.get(id);
     if (!row) return null;
     Object.assign(row, Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined)));
+    await this.recordAudit(audit, id);
     return copy(row);
   }
 
-  async moveStatus(change: StatusChange): Promise<TaskRecord> {
+  async moveStatus(change: StatusChange, audit?: TaskAudit): Promise<TaskRecord> {
     const row = this.rows.get(change.taskId);
     if (!row || row.status !== change.fromStatus) throw new StaleStatusError();
     row.status = change.toStatus;
     this.history.push({ ...change, at: new Date() });
+    await this.recordAudit(audit, change.taskId);
     return copy(row);
+  }
+
+  private async recordAudit(audit: TaskAudit | undefined, entityId: string): Promise<void> {
+    if (audit && this.audit) await this.audit.append(buildAuditRecord({ ...audit, entityType: "Task", entityId }));
   }
 }
 

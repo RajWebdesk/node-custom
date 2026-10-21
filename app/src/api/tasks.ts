@@ -5,7 +5,6 @@ import type { SessionRecord } from "../auth/session.js";
 import { canManageTasks, canMoveTask, canSeeTask, TASK_PRIORITIES, TASK_STATUSES } from "../domain/tasks.js";
 import type { Actor, Role } from "../domain/roles.js";
 import { StaleStatusError, type TaskRecord, type TaskStore } from "../tasks/task-store.js";
-import { recordAudit, type AuditStore } from "../audit/audit.js";
 
 // Task API (spec Module 6). Rules live in domain/tasks.ts. This file loads records, checks access,
 // validates input, and returns the result. Employees see only their own tasks and cannot change them.
@@ -13,7 +12,6 @@ import { recordAudit, type AuditStore } from "../audit/audit.js";
 export interface TasksDeps {
   tasks: TaskStore;
   directory: UserDirectory;
-  audit: AuditStore;
 }
 
 const taskIdParams = z.object({ taskId: z.string().min(1).max(64) });
@@ -216,13 +214,10 @@ export function createTaskHandler(deps: TasksDeps) {
         reviewerId: b.reviewerId,
         startDate: startDate ?? null,
         dueDate: dueDate ?? null,
-      });
-      await recordAudit(deps.audit, {
+      }, {
         actorId: actorOf(res).id,
         action: "task.created",
-        entityType: "Task",
-        entityId: task.id,
-        payload: { title: task.title, priority: task.priority, assigneeId: task.assigneeId, reviewerId: task.reviewerId },
+        payload: { title: b.title, priority: b.priority, assigneeId: b.assigneeId, reviewerId: b.reviewerId },
       });
       res.status(201).json(task);
     } catch {
@@ -262,6 +257,7 @@ export function updateTaskHandler(deps: TasksDeps) {
         res.status(400).json({ error: "invalid-assignee" });
         return;
       }
+      const auditAction = b.archived === true ? "task.archived" : b.archived === false ? "task.restored" : "task.updated";
       const updated = await deps.tasks.update(current.id, {
         title: b.title,
         description: b.description,
@@ -270,16 +266,11 @@ export function updateTaskHandler(deps: TasksDeps) {
         startDate,
         dueDate,
         archivedAt: b.archived === undefined ? undefined : b.archived ? new Date() : null,
+      }, {
+        actorId: actorOf(res).id,
+        action: auditAction,
+        payload: { changes: b },
       });
-      if (updated) {
-        await recordAudit(deps.audit, {
-          actorId: actorOf(res).id,
-          action: b.archived === true ? "task.archived" : b.archived === false ? "task.restored" : "task.updated",
-          entityType: "Task",
-          entityId: updated.id,
-          payload: { changes: b },
-        });
-      }
       res.status(200).json(updated);
     } catch {
       res.status(500).json({ error: "internal-error" });
@@ -322,12 +313,9 @@ export function moveTaskStatusHandler(deps: TasksDeps) {
           fromStatus: task.status,
           toStatus: body.data.status,
           actorId: actor.id,
-        });
-        await recordAudit(deps.audit, {
+        }, {
           actorId: actor.id,
           action: "task.status_changed",
-          entityType: "Task",
-          entityId: task.id,
           payload: { from: task.status, to: body.data.status },
         });
         res.status(200).json(moved);

@@ -171,7 +171,7 @@ export function createApp(options: AppOptions = {}): express.Express {
   app.post("/api/v1/me/password", requireSession(auth), requireCsrf, changePasswordHandler(profileDeps));
 
   // Task API (spec Module 6). Reads are filtered by role inside the handlers; writes need a manager or administrator.
-  const taskDeps = { tasks: options.taskStore ?? new InMemoryTaskStore(), directory: usersDeps.directory, audit };
+  const taskDeps = { tasks: options.taskStore ?? new InMemoryTaskStore(audit), directory: usersDeps.directory };
   app.get("/api/v1/tasks", requireSession(auth), listTasksHandler(taskDeps));
 
   // Activity log for administrators (Task #9.2). Read-only.
