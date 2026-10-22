@@ -18,8 +18,9 @@ import { InMemoryNotificationStore, type NotificationStore } from "../notificati
 import { createUserHandler, listUsersHandler, updateUserHandler } from "./users.js";
 import { InMemoryUserDirectory, type UserDirectory } from "../auth/user-directory.js";
 import { changePasswordHandler, getProfileHandler, updateProfileHandler } from "./profile.js";
-import { createTaskHandler, getTaskHandler, listAssignableUsersHandler, listTasksHandler, moveTaskStatusHandler, requireTaskManager, taskHistoryHandler, updateTaskHandler } from "./tasks.js";
+import { createTaskHandler, getTaskHandler, listAssignableUsersHandler, listTaskListsHandler, listTasksHandler, moveTaskStatusHandler, requireTaskManager, taskHistoryHandler, updateTaskHandler, updateTaskListsHandler } from "./tasks.js";
 import { InMemoryTaskStore, type TaskStore } from "../tasks/task-store.js";
+import { countUsage, InMemoryTaskListStore, type TaskListStore } from "../tasks/task-list-store.js";
 import { InMemoryAuditStore, type AuditReader, type AuditStore } from "../audit/audit.js";
 import { activityHandler } from "./activity.js";
 import { dashboardHandler } from "./dashboard.js";
@@ -42,6 +43,7 @@ export interface AppOptions {
   approvals?: ApprovalStore;
   userDirectory?: UserDirectory;
   taskStore?: TaskStore;
+  taskLists?: TaskListStore;
   audit?: AuditStore & AuditReader;
   allocations?: AllocationStore;
   notifications?: NotificationStore;
@@ -171,8 +173,13 @@ export function createApp(options: AppOptions = {}): express.Express {
   app.post("/api/v1/me/password", requireSession(auth), requireCsrf, changePasswordHandler(profileDeps));
 
   // Task API (spec Module 6). Reads are filtered by role inside the handlers; writes need a manager or administrator.
-  const taskDeps = { tasks: options.taskStore ?? new InMemoryTaskStore(audit), directory: usersDeps.directory };
+  const tasksStore = options.taskStore ?? new InMemoryTaskStore(audit);
+  const taskLists = options.taskLists ?? new InMemoryTaskListStore(audit, tasksStore instanceof InMemoryTaskStore ? async () => countUsage(tasksStore.all()) : undefined);
+  const taskDeps = { tasks: tasksStore, directory: usersDeps.directory, lists: taskLists };
   app.get("/api/v1/tasks", requireSession(auth), listTasksHandler(taskDeps));
+  // Status and priority lists (Task #13.3). Any signed-in user reads them; only administrators change them.
+  app.get("/api/v1/task-lists", requireSession(auth), listTaskListsHandler(taskDeps));
+  app.put("/api/v1/admin/task-lists", requireSession(auth), requireCsrf, requireAdministrator, updateTaskListsHandler(taskDeps));
 
   // Activity log for administrators (Task #9.2). Read-only.
   app.get("/api/v1/activity", requireSession(auth), requireAdministrator, activityHandler({ audit, directory: usersDeps.directory }));
@@ -206,6 +213,7 @@ export function createApp(options: AppOptions = {}): express.Express {
     approvals: options.approvals ?? new InMemoryApprovalStore(taskDeps.tasks, audit, notifications),
     tasks: taskDeps.tasks,
     directory: usersDeps.directory,
+    lists: taskLists,
   };
   app.post("/api/v1/tasks/:taskId/submissions", requireSession(auth), requireCsrf, submitForReviewHandler(approvalDeps));
   app.get("/api/v1/tasks/:taskId/reviews", requireSession(auth), taskReviewsHandler(approvalDeps));

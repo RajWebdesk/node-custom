@@ -7,11 +7,11 @@ import {
   errorText,
   fromIsoDate,
   toIsoDate,
-  TASK_PRIORITIES,
   type AssignableUser,
   type Task,
 } from "../lib/api";
 import { StateMessage } from "./StateMessage";
+import { useTaskLists } from "../lib/use-task-lists";
 
 // Create and edit form for a task (Task #7.2). The API validates everything; the checks here only give quick feedback.
 
@@ -24,6 +24,7 @@ export function TaskForm({
   users: AssignableUser[];
   onSaved: (saved: Task) => void;
 }) {
+  const lists = useTaskLists();
   const editing = Boolean(task);
   const [title, setTitle] = useState(task?.title ?? "");
   const [description, setDescription] = useState(task?.description ?? "");
@@ -112,7 +113,7 @@ export function TaskForm({
       <div className="field">
         <label htmlFor="task-priority">Priority</label>
         <select id="task-priority" value={priority} onChange={(e) => setPriority(e.target.value)}>
-          {TASK_PRIORITIES.map((p) => (
+          {lists.priorities.map((p) => (
             <option key={p} value={p}>
               {p}
             </option>

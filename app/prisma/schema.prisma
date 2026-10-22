@@ -186,3 +186,16 @@ model Reminder {
 
   @@unique([taskId, reminderDate])
 }
+
+// Configurable task lists (pilot, 2026-10-21). kind is "status" or "priority". Protected rows are the
+// workflow-critical statuses; the server refuses to remove or rename them.
+model TaskListItem {
+  id        String   @id @default(uuid())
+  kind      String
+  value     String
+  protected Boolean  @default(false)
+  position  Int
+  createdAt DateTime @default(now())
+
+  @@unique([kind, value])
+}

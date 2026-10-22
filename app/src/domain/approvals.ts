@@ -3,7 +3,8 @@ import { canManageTasks } from "./tasks.js";
 import type { Decision } from "./approval.js";
 
 // Submission and revision rules (spec Module 10, Tasks #10.2 and #10.4). Pure functions, no I/O.
-// Status names are interim (PLACEHOLDER, see domain/tasks.ts). Rejection adds no status: the task stays In Review.
+// Rejection adds no status: the task stays In Review. A task can be submitted from any free status
+// (the built-in ones or an administrator-added one) and from Revision requested.
 
 export const SUBMITTABLE_FROM = ["To Do", "In Progress", "Revision requested"] as const;
 
@@ -23,9 +24,11 @@ export function canSubmit(input: {
   status: string;
   archived: boolean;
   lastDecision: Decision | null;
+  freeStatuses?: readonly string[];
 }): SubmitResult {
   if (input.archived) return { ok: false, reason: "archived" };
-  if ((SUBMITTABLE_FROM as readonly string[]).includes(input.status)) return { ok: true, changesStatus: true };
+  const free = input.freeStatuses ?? SUBMITTABLE_FROM;
+  if (free.includes(input.status) || input.status === "Revision requested") return { ok: true, changesStatus: true };
   if (input.status === "In Review") {
     return input.lastDecision === "reject"
       ? { ok: true, changesStatus: false }

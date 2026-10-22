@@ -2,9 +2,11 @@ import type { NextFunction, Request, Response } from "express";
 import { z } from "zod";
 import type { UserDirectory } from "../auth/user-directory.js";
 import type { SessionRecord } from "../auth/session.js";
-import { canManageTasks, canMoveTask, canSeeTask, TASK_PRIORITIES, TASK_STATUSES } from "../domain/tasks.js";
+import { canManageTasks, canMoveTask, canSeeTask, freeStatusesOf, TASK_STATUSES } from "../domain/tasks.js";
+import { LIST_LIMITS, validateListsUpdate } from "../domain/task-lists.js";
 import type { Actor, Role } from "../domain/roles.js";
 import { StaleStatusError, type TaskRecord, type TaskStore } from "../tasks/task-store.js";
+import type { TaskListStore } from "../tasks/task-list-store.js";
 
 // Task API (spec Module 6). Rules live in domain/tasks.ts. This file loads records, checks access,
 // validates input, and returns the result. Employees see only their own tasks and cannot change them.
@@ -12,14 +14,18 @@ import { StaleStatusError, type TaskRecord, type TaskStore } from "../tasks/task
 export interface TasksDeps {
   tasks: TaskStore;
   directory: UserDirectory;
+  lists: TaskListStore;
 }
+
+// Status and priority values are checked against the stored lists, not a fixed enum (Task #13.3).
+const listValue = z.string().trim().min(1).max(LIST_LIMITS.valueLength);
 
 const taskIdParams = z.object({ taskId: z.string().min(1).max(64) });
 
 const listQuery = z.object({
   q: z.string().trim().max(200).optional(),
-  status: z.enum(TASK_STATUSES).optional(),
-  priority: z.enum(TASK_PRIORITIES).optional(),
+  status: listValue.optional(),
+  priority: listValue.optional(),
   assigneeId: z.string().min(1).max(64).optional(),
   archived: z.enum(["true", "false"]).default("false"),
   page: z.coerce.number().int().min(1).default(1),
@@ -34,7 +40,7 @@ const createBody = z
   .object({
     title: z.string().trim().min(1).max(200),
     description: z.string().trim().max(5000).nullable().optional(),
-    priority: z.enum(TASK_PRIORITIES),
+    priority: listValue,
     assigneeId: z.string().min(1).max(64),
     reviewerId: z.string().min(1).max(64),
     startDate: dateString.optional(),
@@ -47,7 +53,7 @@ const patchBody = z
   .object({
     title: z.string().trim().min(1).max(200).optional(),
     description: z.string().trim().max(5000).nullable().optional(),
-    priority: z.enum(TASK_PRIORITIES).optional(),
+    priority: listValue.optional(),
     assigneeId: z.string().min(1).max(64).optional(),
     startDate: dateString.optional(),
     dueDate: dateString.optional(),
@@ -56,7 +62,26 @@ const patchBody = z
   .strict()
   .refine((body) => Object.keys(body).length > 0, { message: "empty-patch" });
 
-const statusBody = z.object({ status: z.enum(TASK_STATUSES) }).strict();
+const statusBody = z.object({ status: listValue }).strict();
+
+const listsBody = z.object({ statuses: z.array(z.string()).max(50), priorities: z.array(z.string()).max(50) }).strict();
+
+// Current lists: the built-in statuses plus the stored extras, and the priorities.
+async function currentLists(store: TaskListStore) {
+  const stored = await store.read();
+  const statuses = [...TASK_STATUSES, ...stored.statuses];
+  return { statuses, priorities: stored.priorities, free: freeStatusesOf(statuses) };
+}
+
+function listsView(statuses: string[], priorities: string[]) {
+  return {
+    statuses: [
+      ...TASK_STATUSES.map((value) => ({ value, protected: true })),
+      ...statuses.filter((s) => !(TASK_STATUSES as readonly string[]).includes(s)).map((value) => ({ value, protected: false })),
+    ],
+    priorities,
+  };
+}
 
 function actorOf(res: Response): Actor {
   const session = res.locals.session as SessionRecord;
@@ -200,6 +225,10 @@ export function createTaskHandler(deps: TasksDeps) {
         res.status(400).json({ error: "invalid-assignee" });
         return;
       }
+      if (!(await currentLists(deps.lists)).priorities.includes(b.priority)) {
+        res.status(400).json({ error: "invalid-priority" });
+        return;
+      }
       if (!(await reviewerIsValid(deps.directory, b.reviewerId))) {
         res.status(400).json({ error: "invalid-reviewer" });
         return;
@@ -257,6 +286,10 @@ export function updateTaskHandler(deps: TasksDeps) {
         res.status(400).json({ error: "invalid-assignee" });
         return;
       }
+      if (b.priority !== undefined && !(await currentLists(deps.lists)).priorities.includes(b.priority)) {
+        res.status(400).json({ error: "invalid-priority" });
+        return;
+      }
       const auditAction = b.archived === true ? "task.archived" : b.archived === false ? "task.restored" : "task.updated";
       const updated = await deps.tasks.update(current.id, {
         title: b.title,
@@ -302,7 +335,7 @@ export function moveTaskStatusHandler(deps: TasksDeps) {
         res.status(403).json({ error: "forbidden" });
         return;
       }
-      const check = canMoveTask(task.status, body.data.status, task.archivedAt !== null);
+      const check = canMoveTask(task.status, body.data.status, task.archivedAt !== null, (await currentLists(deps.lists)).statuses);
       if (!check.ok) {
         res.status(check.reason === "unknown-status" ? 400 : 409).json({ error: check.reason });
         return;
@@ -326,6 +359,42 @@ export function moveTaskStatusHandler(deps: TasksDeps) {
         }
         throw err;
       }
+    } catch {
+      res.status(500).json({ error: "internal-error" });
+    }
+  };
+}
+
+// Task list settings (Task #13.3). Reading is open to signed-in users; changing is administrator-only.
+export function listTaskListsHandler(deps: TasksDeps) {
+  return async (_req: Request, res: Response) => {
+    try {
+      const stored = await deps.lists.read();
+      res.status(200).json(listsView(stored.statuses, stored.priorities));
+    } catch {
+      res.status(500).json({ error: "internal-error" });
+    }
+  };
+}
+
+export function updateTaskListsHandler(deps: TasksDeps) {
+  return async (req: Request, res: Response) => {
+    try {
+      const body = listsBody.safeParse(req.body);
+      if (!body.success) {
+        res.status(400).json({ error: "validation-failed" });
+        return;
+      }
+      const result = validateListsUpdate(body.data, await deps.lists.read(), await deps.lists.usage());
+      if (!result.ok) {
+        res.status(result.error === "in-use" ? 409 : 400).json({ error: result.error, value: result.value ?? null, kind: result.kind ?? null });
+        return;
+      }
+      const saved = await deps.lists.write(
+        { statuses: result.statuses, priorities: result.priorities },
+        { actorId: actorOf(res).id, action: "task_lists.updated", payload: { statuses: result.statuses, priorities: result.priorities } },
+      );
+      res.status(200).json(listsView(saved.statuses, saved.priorities));
     } catch {
       res.status(500).json({ error: "internal-error" });
     }

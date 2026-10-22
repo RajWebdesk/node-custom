@@ -132,6 +132,11 @@ export class InMemoryTaskStore implements TaskStore {
     return row ? copy(row) : null;
   }
 
+  // Every task, archived or not. Used to count how many tasks use a status or priority.
+  all(): TaskRecord[] {
+    return [...this.rows.values()].map(copy);
+  }
+
   async create(input: NewTask, audit?: TaskAudit): Promise<TaskRecord> {
     const row: TaskRecord = { ...input, id: randomBytes(16).toString("hex"), archivedAt: null, createdAt: new Date() };
     this.rows.set(row.id, row);

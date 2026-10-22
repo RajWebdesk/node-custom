@@ -3,11 +3,12 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 import { decideApproval, DECISIONS, type Decision } from "../domain/approval.js";
 import type { Actor, Role } from "../domain/roles.js";
-import { canSeeTask, canManageTasks } from "../domain/tasks.js";
+import { canSeeTask, canManageTasks, freeStatusesOf, TASK_STATUSES } from "../domain/tasks.js";
 import { canSubmit, canSubmitTask, statusAfterDecision } from "../domain/approvals.js";
 import type { SessionRecord } from "../auth/session.js";
 import type { UserDirectory } from "../auth/user-directory.js";
 import type { TaskStore } from "../tasks/task-store.js";
+import type { TaskListStore } from "../tasks/task-list-store.js";
 import { DuplicateDecisionError, StaleApprovalError, type ApprovalStore, type SubmissionRecord } from "../approvals/approval-store.js";
 
 // Approval workflow API (spec Module 10, Tasks #10.1 to #10.4). Rules live in domain/approval.ts and
@@ -18,6 +19,8 @@ export interface ApprovalDeps {
   approvals: ApprovalStore;
   tasks: TaskStore;
   directory: UserDirectory;
+  // Configured task lists decide which statuses a task can be submitted from (Task #13.3).
+  lists?: TaskListStore;
 }
 
 const idParams = z.object({ id: z.string().min(1).max(64) });
@@ -66,7 +69,8 @@ export function submitForReviewHandler(deps: ApprovalDeps) {
       }
       const history = await deps.approvals.listForTask(task.id);
       const lastDecision = history.length > 0 ? history[history.length - 1].decision : null;
-      const check = canSubmit({ status: task.status, archived: task.archivedAt !== null, lastDecision });
+      const freeStatuses = deps.lists ? freeStatusesOf([...TASK_STATUSES, ...(await deps.lists.read()).statuses]) : undefined;
+      const check = canSubmit({ status: task.status, archived: task.archivedAt !== null, lastDecision, freeStatuses });
       if (!check.ok) {
         res.status(check.reason === "forbidden" ? 403 : 409).json({ error: check.reason });
         return;

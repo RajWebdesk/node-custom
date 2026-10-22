@@ -6,13 +6,12 @@ import {
   apiRequest,
   formatDate,
   isManager,
-  TASK_PRIORITIES,
-  TASK_STATUSES,
   type AssignableUser,
   type Me,
   type Task,
 } from "../lib/api";
 import { StateMessage } from "./StateMessage";
+import { useTaskLists } from "../lib/use-task-lists";
 
 // Task list with search, filters, sort, and paging (Task #7.1). The API scopes the rows to the caller.
 
@@ -25,6 +24,7 @@ const SORTS: { value: string; label: string }[] = [
 ];
 
 export function TasksPanel() {
+  const lists = useTaskLists();
   const [me, setMe] = useState<Me | null>(null);
   const [users, setUsers] = useState<Map<string, string>>(new Map());
   const [q, setQ] = useState("");
@@ -101,7 +101,7 @@ export function TasksPanel() {
           <label htmlFor="filter-status">Status</label>
           <select id="filter-status" value={status} onChange={(e) => changeFilter(() => setStatus(e.target.value))}>
             <option value="">All statuses</option>
-            {TASK_STATUSES.map((s) => (
+            {lists.statuses.map((s) => (
               <option key={s} value={s}>
                 {s}
               </option>
@@ -112,7 +112,7 @@ export function TasksPanel() {
           <label htmlFor="filter-priority">Priority</label>
           <select id="filter-priority" value={priority} onChange={(e) => changeFilter(() => setPriority(e.target.value))}>
             <option value="">All priorities</option>
-            {TASK_PRIORITIES.map((p) => (
+            {lists.priorities.map((p) => (
               <option key={p} value={p}>
                 {p}
               </option>

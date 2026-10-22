@@ -19,14 +19,24 @@ export const consoleLogger: Logger = {
 // Request ids are safe to echo back: short, alphanumeric, and generated here unless the caller supplies a clean one.
 const CLEAN_ID = /^[A-Za-z0-9-]{8,64}$/;
 
+// Duration buckets in milliseconds. The pilot target is p95 under 1000 ms (provisional, 2026-10-21), so the
+// 1000 ms bound must exist for the p95 to be estimated from the buckets.
+export const DURATION_BUCKETS_MS = [50, 100, 250, 500, 1000, 2500, 5000] as const;
+
 export class Metrics {
   private readonly counts = new Map<string, number>();
   private readonly durationSum = new Map<string, number>();
+  private readonly buckets = new Map<string, number[]>();
 
   record(method: string, route: string, status: number, durationMs: number): void {
     const key = `${method} ${route} ${status}`;
     this.counts.set(key, (this.counts.get(key) ?? 0) + 1);
     this.durationSum.set(key, (this.durationSum.get(key) ?? 0) + durationMs);
+    const counts = this.buckets.get(key) ?? DURATION_BUCKETS_MS.map(() => 0);
+    DURATION_BUCKETS_MS.forEach((bound, i) => {
+      if (durationMs <= bound) counts[i] += 1;
+    });
+    this.buckets.set(key, counts);
   }
 
   // Prometheus text format. Labels hold only method, route pattern, and status.
@@ -43,6 +53,14 @@ export class Metrics {
     for (const [key, value] of this.durationSum) {
       const [method, route, status] = key.split(" ");
       lines.push(`http_request_duration_ms_sum{method="${method}",route="${route}",status="${status}"} ${value.toFixed(1)}`);
+    }
+    lines.push("# HELP http_request_duration_ms Request duration histogram in milliseconds.", "# TYPE http_request_duration_ms histogram");
+    for (const [key, counts] of this.buckets) {
+      const [method, route, status] = key.split(" ");
+      const labels = `method="${method}",route="${route}",status="${status}"`;
+      DURATION_BUCKETS_MS.forEach((bound, i) => lines.push(`http_request_duration_ms_bucket{${labels},le="${bound}"} ${counts[i]}`));
+      lines.push(`http_request_duration_ms_bucket{${labels},le="+Inf"} ${this.counts.get(key) ?? 0}`);
+      lines.push(`http_request_duration_ms_count{${labels}} ${this.counts.get(key) ?? 0}`);
     }
     return `${lines.join("\n")}\n`;
   }

@@ -6,19 +6,19 @@ import {
   apiRequest,
   errorCode,
   errorText,
-  FREE_STATUSES,
   isManager,
-  TASK_STATUSES,
   type AssignableUser,
   type Me,
   type Task,
 } from "../lib/api";
 import { StateMessage } from "./StateMessage";
+import { useTaskLists } from "../lib/use-task-lists";
 
 // Kanban board (Task #7.3). Drag-and-drop and the keyboard "Move to" control call the same status endpoint,
 // so the server applies the same transition rules to both. Approval-controlled columns accept no drops.
 
 export function KanbanBoard() {
+  const lists = useTaskLists();
   const [me, setMe] = useState<Me | null>(null);
   const [tasks, setTasks] = useState<Task[] | null>(null);
   const [users, setUsers] = useState<Map<string, string>>(new Map());
@@ -78,9 +78,9 @@ export function KanbanBoard() {
   if (!tasks || !me) return <StateMessage kind="loading" />;
 
   const active = tasks.filter((t) => t.archivedAt === null);
-  const columns = TASK_STATUSES.map((status) => ({
+  const columns = lists.statuses.map((status) => ({
     status,
-    free: (FREE_STATUSES as readonly string[]).includes(status),
+    free: lists.free.includes(status),
     tasks: active.filter((t) => t.status === status),
   }));
 
@@ -123,7 +123,7 @@ export function KanbanBoard() {
               <article
                 key={t.id}
                 className="card"
-                draggable={manager && FREE_STATUSES.includes(t.status as (typeof FREE_STATUSES)[number])}
+                draggable={manager && lists.free.includes(t.status)}
                 onDragStart={() => setDragging(t.id)}
                 onDragEnd={() => setDragging(null)}
                 aria-label={t.title}
@@ -134,7 +134,7 @@ export function KanbanBoard() {
                 <p className="kpi-label">
                   {t.priority} · {manager ? users.get(t.assigneeId) ?? "Assigned user" : "Assigned to you"}
                 </p>
-                {manager && (FREE_STATUSES as readonly string[]).includes(t.status) ? (
+                {manager && lists.free.includes(t.status) ? (
                   <label>
                     <span className="kpi-label">Move to</span>
                     <select
@@ -144,7 +144,7 @@ export function KanbanBoard() {
                       }}
                     >
                       <option value="">Choose status</option>
-                      {FREE_STATUSES.filter((s) => s !== t.status).map((s) => (
+                      {lists.free.filter((s) => s !== t.status).map((s) => (
                         <option key={s} value={s}>
                           {s}
                         </option>

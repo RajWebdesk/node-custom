@@ -7,10 +7,12 @@ import type { Decision } from "../domain/approval.js";
 import { randomBytes } from "node:crypto";
 import { DuplicateEmailError, type NewUser, type UserDirectory, type UserPatch, type UserView } from "./user-directory.js";
 import type { AuditQuery, AuditReader, AuditRecord, AuditStore } from "../audit/audit.js";
-import { buildAuditRecord } from "../audit/audit.js";
+import { buildAuditRecord, type AuditInput } from "../audit/audit.js";
 import { StaleAllocationError, type AllocationRow, type AllocationStore, type ApplyChangeInput, type ChangeRow } from "../allocation/allocation-store.js";
 import { DuplicateDecisionError, StaleApprovalError, type ApprovalStore, type DecideInput, type QueueRow, type SubmissionRecord, type SubmitInput } from "../approvals/approval-store.js";
 import type { EmailStatus, NewNotification, NotificationRecord, NotificationStore } from "../notifications/notification-store.js";
+import type { TaskListSnapshot, TaskListStore } from "../tasks/task-list-store.js";
+import type { ListsUpdate, TaskUsage } from "../domain/task-lists.js";
 import { StaleStatusError, type TaskAudit, type TaskHistoryRow, type NewTask, type StatusChange, type TaskPatch, type TaskQuery, type TaskRecord, type TaskStore } from "../tasks/task-store.js";
 
 // Database-backed stores for the Prisma schema (prisma/schema.prisma).
@@ -225,6 +227,48 @@ function toTaskRecord(row: TaskRow): TaskRecord {
 function taskAuditRow(audit: TaskAudit, entityId: string) {
   const record = buildAuditRecord({ ...audit, entityType: "Task", entityId });
   return { id: record.id, actorId: record.actorId, action: record.action, entityType: record.entityType, entityId: record.entityId, payload: record.payload as object, at: record.at };
+}
+
+// Stored task lists (Task #13.3). Extra statuses and priorities; the built-in statuses are protected in code.
+export class PrismaTaskListStore implements TaskListStore {
+  constructor(private readonly db: PrismaClient) {}
+
+  async read(): Promise<TaskListSnapshot> {
+    const rows = await this.db.taskListItem.findMany({ where: { OR: [{ kind: "priority" }, { kind: "status", protected: false }] }, orderBy: { position: "asc" } });
+    return {
+      statuses: rows.filter((r) => r.kind === "status").map((r) => r.value),
+      priorities: rows.filter((r) => r.kind === "priority").map((r) => r.value),
+    };
+  }
+
+  async usage(): Promise<TaskUsage> {
+    const [statuses, priorities] = await Promise.all([
+      this.db.task.groupBy({ by: ["status"], _count: { _all: true } }),
+      this.db.task.groupBy({ by: ["priority"], _count: { _all: true } }),
+    ]);
+    return {
+      status: Object.fromEntries(statuses.map((g) => [g.status, g._count._all])),
+      priority: Object.fromEntries(priorities.map((g) => [g.priority, g._count._all])),
+    };
+  }
+
+  // Replaces the extra statuses and the priorities in one transaction with the audit record.
+  async write(next: ListsUpdate, audit: Omit<AuditInput, "entityType" | "entityId">): Promise<TaskListSnapshot> {
+    return this.db.$transaction(async (tx) => {
+      await tx.taskListItem.deleteMany({ where: { OR: [{ kind: "priority" }, { kind: "status", protected: false }] } });
+      await tx.taskListItem.createMany({
+        data: [
+          ...next.statuses.map((value, position) => ({ kind: "status", value, protected: false, position })),
+          ...next.priorities.map((value, position) => ({ kind: "priority", value, protected: false, position })),
+        ],
+      });
+      const record = buildAuditRecord({ ...audit, entityType: "TaskList", entityId: "task-lists" });
+      await tx.auditEvent.create({
+        data: { id: record.id, actorId: record.actorId, action: record.action, entityType: record.entityType, entityId: record.entityId, payload: record.payload as object, at: record.at },
+      });
+      return { statuses: [...next.statuses], priorities: [...next.priorities] };
+    });
+  }
 }
 
 export class PrismaTaskStore implements TaskStore {

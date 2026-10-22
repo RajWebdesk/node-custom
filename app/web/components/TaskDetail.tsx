@@ -7,13 +7,13 @@ import {
   errorCode,
   errorText,
   formatDate,
-  FREE_STATUSES,
   isManager,
   type AssignableUser,
   type Me,
   type Task,
 } from "../lib/api";
 import { StateMessage } from "./StateMessage";
+import { useTaskLists } from "../lib/use-task-lists";
 import { TaskForm } from "./TaskForm";
 import { TaskHistory } from "./TaskHistory";
 import { TaskReviews } from "./TaskReviews";
@@ -22,6 +22,7 @@ import { TaskReviews } from "./TaskReviews";
 // The API enforces the same rules for every action.
 
 export function TaskDetail({ taskId }: { taskId: string }) {
+  const lists = useTaskLists();
   const [me, setMe] = useState<Me | null>(null);
   const [task, setTask] = useState<Task | null>(null);
   const [users, setUsers] = useState<AssignableUser[]>([]);
@@ -92,8 +93,8 @@ export function TaskDetail({ taskId }: { taskId: string }) {
   // "You" only for the signed-in user. Employees have no user directory, so other people show a neutral label.
   const name = (id: string) => (me !== null && id === me.id ? "You" : users.find((u) => u.id === id)?.name ?? "Assigned user");
   const archived = task.archivedAt !== null;
-  const isFree = (FREE_STATUSES as readonly string[]).includes(task.status);
-  const moves = isFree ? FREE_STATUSES.filter((s) => s !== task.status) : [];
+  const isFree = lists.free.includes(task.status);
+  const moves = isFree ? lists.free.filter((s) => s !== task.status) : [];
 
   return (
     <>

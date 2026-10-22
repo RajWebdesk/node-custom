@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { apiRequest } from "../lib/api";
 import { StateMessage } from "./StateMessage";
+import { TaskListsEditor } from "./TaskListsEditor";
 
 // Settings (Task #13.4). Administrators see the approved values and role rules, read-only.
 // Everyone sees a link to their own profile settings. The API checks the administrator role.
@@ -115,6 +116,8 @@ export function SettingsPanel() {
               </table>
             </div>
           </section>
+
+          <TaskListsEditor />
         </>
       ) : null}
     </>

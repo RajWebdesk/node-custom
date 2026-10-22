@@ -10,6 +10,7 @@ import {
   PrismaSessionStore,
   PrismaUserAdminStore,
   PrismaTaskStore,
+  PrismaTaskListStore,
   PrismaUserDirectory,
   PrismaUserStore,
 } from "./auth/prisma-stores.js";
@@ -33,6 +34,7 @@ createApp({
   approvals: new PrismaApprovalStore(db),
   userDirectory: new PrismaUserDirectory(db),
   taskStore: new PrismaTaskStore(db),
+  taskLists: new PrismaTaskListStore(db),
   audit: new PrismaAuditStore(db),
   allocations: new PrismaAllocationStore(db),
   notifications: new PrismaNotificationStore(db),

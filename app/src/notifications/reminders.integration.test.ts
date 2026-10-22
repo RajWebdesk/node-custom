@@ -19,6 +19,9 @@ describe.runIf(enabled)("due-reminder job (Task #11.4)", () => {
   const taskIds: Record<string, string> = {};
 
   beforeAll(async () => {
+    // Clear leftovers for this file's fixed slot dates, so the test is repeatable on a database that already has rows.
+    await db.reminder.deleteMany({ where: { slotKey: { in: [`${SLOT_DAY}T09:00`] } } });
+    await db.reminderRun.deleteMany({ where: { slotKey: { in: [`${SLOT_DAY}T09:00`] } } });
     await db.user.createMany({
       data: [
         { id: assigneeId, name: "Assignee", email: `${assigneeId}@example.test`, passwordHash: "x", status: "active" },
@@ -52,7 +55,7 @@ describe.runIf(enabled)("due-reminder job (Task #11.4)", () => {
 
   afterAll(async () => {
     const ids = Object.values(taskIds);
-    await db.reminder.deleteMany({ where: { taskId: { in: ids } } });
+    await db.reminder.deleteMany({ where: { OR: [{ taskId: { in: ids } }, { slotKey: `${SLOT_DAY}T09:00` }] } });
     await db.notification.deleteMany({ where: { recipientId: assigneeId } });
     await db.reminderRun.deleteMany({ where: { slotKey: `${SLOT_DAY}T09:00` } });
     await db.taskStatusHistory.deleteMany({ where: { taskId: { in: ids } } });
@@ -94,8 +97,15 @@ describe.runIf(enabled)("due-reminder recovery drill (G5)", () => {
   const NOW = new Date("2030-03-21T14:00:00Z"); // 10:00 Toronto
   const KEY = `${DAY}T09:00`;
 
+  const KEYS = [KEY, "2030-03-22T09:00"];
+  beforeAll(async () => {
+    await db.reminder.deleteMany({ where: { slotKey: { in: KEYS } } });
+    await db.reminderRun.deleteMany({ where: { slotKey: { in: KEYS } } });
+  });
+
   afterAll(async () => {
-    await db.reminderRun.deleteMany({ where: { slotKey: KEY } });
+    await db.reminder.deleteMany({ where: { slotKey: { in: KEYS } } });
+    await db.reminderRun.deleteMany({ where: { slotKey: { in: KEYS } } });
   });
 
   it("does not run twice while a run is recent, reclaims a run abandoned past the lock, and never repeats a finished slot", async () => {
@@ -118,6 +128,7 @@ describe.runIf(enabled)("due-reminder recovery drill (G5)", () => {
     await db.reminderRun.create({ data: { slotKey: failedKey, status: "failed", startedAt: NOW } });
     const outcome = await runDueReminders(db, new Date("2030-03-22T14:00:00Z"));
     expect(outcome.status).toBe("done");
+    await db.reminder.deleteMany({ where: { slotKey: failedKey } });
     await db.reminderRun.deleteMany({ where: { slotKey: failedKey } });
   });
 });

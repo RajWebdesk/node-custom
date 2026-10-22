@@ -2,6 +2,7 @@ import type { NextFunction, Request, Response } from "express";
 import { z } from "zod";
 import type { Role } from "../domain/roles.js";
 import { verifyPassword } from "../auth/password.js";
+import { LOGIN_MAX_FAILURES, LOGIN_WINDOW_MS, LoginLimiter } from "../auth/login-limiter.js";
 import {
   clearSessionCookie,
   csrfMatches,
@@ -31,6 +32,8 @@ export interface AuthDeps {
   sessions: SessionStore;
   ttlMinutes: number;
   secureCookies: boolean;
+  // Sign-in failure limit. One instance is created per app when not given (pilot decision, 2026-10-21).
+  limiter?: LoginLimiter;
 }
 
 // Generic failure message. Never reveals whether the email exists.
@@ -42,9 +45,10 @@ const loginBody = z.object({
 });
 
 export function loginHandler(deps: AuthDeps) {
+  const limiter = deps.limiter ?? new LoginLimiter({ maxFailures: LOGIN_MAX_FAILURES, windowMs: LOGIN_WINDOW_MS });
   return async (req: Request, res: Response) => {
     try {
-      await handleLogin(deps, req, res);
+      await handleLogin(deps, limiter, req, res);
     } catch {
       // Database or hashing failure: generic error, no details, process keeps running.
       res.status(500).json({ error: "internal-error" });
@@ -52,22 +56,32 @@ export function loginHandler(deps: AuthDeps) {
   };
 }
 
-async function handleLogin(deps: AuthDeps, req: Request, res: Response): Promise<void> {
+async function handleLogin(deps: AuthDeps, limiter: LoginLimiter, req: Request, res: Response): Promise<void> {
     const body = loginBody.safeParse(req.body);
     if (!body.success) {
       res.status(400).json({ error: "validation-failed" });
       return;
     }
-    const user = await deps.users.findByEmail(body.data.email.toLowerCase());
+    const email = body.data.email.toLowerCase();
+    const keys = LoginLimiter.keysFor(email, req.ip ?? "unknown");
+    const wait = limiter.retryAfterSeconds(keys);
+    if (wait > 0) {
+      res.setHeader("Retry-After", String(wait));
+      res.status(429).json({ error: "too-many-attempts" });
+      return;
+    }
+    const user = await deps.users.findByEmail(email);
     // Verify even when the user is missing, to keep timing similar.
     const ok = await verifyPassword(
       user?.passwordHash ?? "$argon2id$v=19$m=19456,t=2,p=1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
       body.data.password,
     );
     if (!user || !ok || user.status !== "active") {
+      limiter.recordFailure(keys);
       res.status(401).json(LOGIN_FAILED);
       return;
     }
+    limiter.reset(keys[0]);
     const session = await deps.sessions.create(user.id, user.roles, deps.ttlMinutes);
     res.setHeader(
       "Set-Cookie",

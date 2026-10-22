@@ -105,3 +105,19 @@ describe("exported metrics (G5.5)", () => {
     expect(res.text).toContain("http_request_duration_ms_sum");
   });
 });
+
+describe("duration histogram (provisional pilot target: p95 under 1000 ms, 2026-10-21)", () => {
+  it("counts each request in every bucket at or above its duration", () => {
+    const metrics = new Metrics();
+    metrics.record("GET", "/api/v1/tasks", 200, 40);
+    metrics.record("GET", "/api/v1/tasks", 200, 300);
+    metrics.record("GET", "/api/v1/tasks", 200, 1200);
+    const text = metrics.render();
+    const label = 'method="GET",route="/api/v1/tasks",status="200"';
+    expect(text).toContain(`http_request_duration_ms_bucket{${label},le="250"} 1`);
+    expect(text).toContain(`http_request_duration_ms_bucket{${label},le="1000"} 2`);
+    expect(text).toContain(`http_request_duration_ms_bucket{${label},le="+Inf"} 3`);
+    expect(text).toContain(`http_request_duration_ms_count{${label}} 3`);
+  });
+});
+
